@@ -36,17 +36,17 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# ✅ Excel File and Sheets
+excel_file = 'Data.xlsx'
+sheet_names = ['corp', 'EB', 'SS', 'PLD', 'AFFINITY', 'MINING']
+
 # ✅ Load Data Function
 def load_data():
-    excel_file = 'Data.xlsx'
-    sheet_names = ['corp', 'EB', 'SS', 'PLD', 'AFFINITY', 'MINING']
-
     combined_data = []
     for sheet in sheet_names:
         df = pd.read_excel(excel_file, sheet_name=sheet, engine='openpyxl')
         df['SOURCE_SHEET'] = sheet
         combined_data.append(df)
-
     final_df = pd.concat(combined_data, ignore_index=True)
     return final_df
 
@@ -80,17 +80,27 @@ def reset_table(df):
                   'July', 'August', 'September', 'October', 'November', 'December']
     all_holders = df['ACCOUNT HOLDER'].dropna().unique()
 
-    # Create zeroed-out DataFrame
     zero_df = pd.DataFrame(0, index=all_holders, columns=all_months)
-
     styled_df = zero_df.style.applymap(lambda x: 'color: red; font-weight: bold;')
     st.write(styled_df.to_html(), unsafe_allow_html=True)
+
+# ✅ Clear Excel Function
+def clear_excel():
+    with pd.ExcelWriter(excel_file, engine='openpyxl') as writer:
+        for sheet in sheet_names:
+            empty_df = pd.DataFrame(columns=['ACCOUNT HOLDER', 'STATUS_UPDATED_AT'])
+            empty_df.to_excel(writer, sheet_name=sheet, index=False)
 
 # ✅ Main Logic
 final_df = load_data()
 
-# ✅ Reset Button Only
-if st.button("⛔ Reset Table to Zero"):
+st.markdown("### Actions")
+
+# ✅ Buttons
+if st.button("🧹 Clear All Data in Excel"):
+    clear_excel()
+    st.success("✅ All sheets have been cleared! Please refresh the app.")
+elif st.button("⛔ Reset Table to Zero"):
     reset_table(final_df)
 else:
     display_table(final_df)
