@@ -44,6 +44,11 @@ def start_watcher():
     observer.schedule(event_handler, '.', recursive=False)
     observer.start()
 
+# ✅ Root route to avoid 404
+@app.route('/')
+def home():
+    return "✅ API is running! Use /data to get data or /update to update Excel."
+
 @app.route('/data', methods=['GET'])
 def get_all_data():
     return jsonify(final_df.to_dict(orient='records'))
@@ -112,3 +117,4 @@ def update_excel():
 if __name__ == '__main__':
     threading.Thread(target=start_watcher, daemon=True).start()
     app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
+    
