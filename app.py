@@ -2,24 +2,25 @@ import streamlit as st
 import requests
 import pandas as pd
 
-API_URL = "http://127.0.0.1:5000/data"
-UPDATE_URL = "http://127.0.0.1:5000/update"
+# ✅ Use deployed API URLs
+API_URL = "https://cross-selling-dashboard-minet-4.onrender.com/data"
+UPDATE_URL = "https://cross-selling-dashboard-minet-4.onrender.com/update"
 
 # ✅ Custom CSS (Fix title and logo spacing)
 st.markdown("""
     <style>
         .block-container {
-            padding-top: 2.9rem !important; /* Enough space for logo and title */
+            padding-top: 2.9rem !important;
             padding-left: 1rem;
             padding-right: 1rem;
             max-width: 100%;
         }
         h1 {
-            margin-top: 0; /* Prevent extra margin above title */
+            margin-top: 0;
             text-align: center;
         }
         img {
-            margin-top: 10px; /* Space above logo */
+            margin-top: 10px;
         }
         table {
             width: 100% !important;
@@ -41,9 +42,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ✅ Header Layout
-col1, col2 = st.columns([2, 8])  # Adjusted ratio for logo space
+col1, col2 = st.columns([2, 8])
 with col1:
-    st.image("minet.png", width=180)  # Increased width for better visibility
+    st.image("minet.png", width=180)
 with col2:
     st.markdown("<h1 style='color:#2C3E50;'>OFFICE OF THE CUSTOMER DASHBOARD</h1>", unsafe_allow_html=True)
 
