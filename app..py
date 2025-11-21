@@ -7,18 +7,6 @@ import os
 # ✅ Set wide layout
 st.set_page_config(layout="wide")
 
-# ✅ Sidebar styling
-st.markdown("""
-    <style>
-        [data-testid="stSidebar"] {
-            background-color: black;
-        }
-        [data-testid="stSidebar"] * {
-            color: white;
-        }
-    </style>
-""", unsafe_allow_html=True)
-
 # ✅ File for persistence
 DATA_FILE = "leave_data.csv"
 
@@ -41,7 +29,6 @@ def save_leave_data(df):
 
 # ✅ FIXED: Group consecutive dates into ranges
 def get_leave_ranges(df, employee):
-    # Convert to datetime and drop invalid values
     emp_dates = sorted(pd.to_datetime(df[df["Employee"] == employee]["Date"], errors="coerce").dropna().tolist())
     ranges = []
     if emp_dates:
@@ -135,7 +122,7 @@ if manager_view:
             st.table(leave_summary_df)
 else:
     st.markdown("<h3>Leave Calendar</h3>", unsafe_allow_html=True)
-    html = '<div class="calendar-container" style="display:grid;grid-template-columns:repeat(4,1fr);gap:20px;">'
+    html = '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:20px;">'
     today = datetime.now().date()
     leave_dict = {}
     for _, row in st.session_state.leave_data.iterrows():
@@ -144,7 +131,7 @@ else:
     for month in range(1, 13):
         month_days = calendar.monthcalendar(year, month)
         html += f'<div><h4 style="text-align:center;">{calendar.month_name[month]}</h4>'
-        html += "<table><tr>" + "".join([f"<th>{d}</th>" for d in ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]]) + "</tr>"
+        html += "<table style='width:100%;border-collapse:collapse;'><tr>" + "".join([f"<th>{d}</th>" for d in ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]]) + "</tr>"
         for week in month_days:
             html += "<tr>"
             for i, day in enumerate(week):
