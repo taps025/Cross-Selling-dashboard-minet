@@ -121,7 +121,8 @@ if manager_view:
             leave_summary_df = pd.DataFrame(grouped_data, columns=["Name", "Leave From", "Leave End", "Duration"])
             st.table(leave_summary_df)
 else:
-    st.markdown("<h3>Leave Calendar</h3>", unsafe_allow_html=True)
+    # ✅ Calendar formatted like example
+    st.markdown("<h3 style='text-align:center;'>Leave Calendar</h3>", unsafe_allow_html=True)
     html = '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:20px;">'
     today = datetime.now().date()
     leave_dict = {}
@@ -131,23 +132,26 @@ else:
     for month in range(1, 13):
         month_days = calendar.monthcalendar(year, month)
         html += f'<div><h4 style="text-align:center;">{calendar.month_name[month]}</h4>'
-        html += "<table style='width:100%;border-collapse:collapse;'><tr>" + "".join([f"<th>{d}</th>" for d in ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]]) + "</tr>"
+        html += "<table style='width:100%;border-collapse:collapse;text-align:center;'>"
+        html += "<tr>" + "".join([f"<th style='padding:4px;border:1px solid #ddd;'>{d}</th>" for d in ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]]) + "</tr>"
+        
         for week in month_days:
             html += "<tr>"
             for i, day in enumerate(week):
                 if day == 0:
-                    html += "<td></td>"
+                    html += "<td style='border:1px solid #ddd;padding:6px;'></td>"
                 else:
                     date_obj = datetime(year, month, day).date()
-                    style = ""
+                    style = "padding:6px;border:1px solid #ddd;"
                     if date_obj in leave_dict:
-                        style = "font-weight:bold;"  # Leave days bold
+                        style += "font-weight:bold;"  # Highlight leave days
                     if date_obj == today:
-                        style += " border:2px solid #2ecc71;"
+                        style += "border:2px solid #2ecc71;"  # Highlight today
                     html += f"<td style='{style}'>{day}</td>"
             html += "</tr>"
         html += "</table></div>"
     html += "</div>"
+
     st.markdown(html, unsafe_allow_html=True)
 
 # ✅ Delete Leave Range
