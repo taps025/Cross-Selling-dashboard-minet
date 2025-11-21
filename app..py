@@ -140,7 +140,7 @@ else:
             border-radius: 2px;
             padding: 4px;
             background: #fff;
-            font-size: 12px;
+            font-size: 10px;
         }
         table {
             width: 100%;
@@ -211,5 +211,6 @@ if not st.session_state.leave_data.empty:
             st.success(f"Deleted leave range {selected_range} for {selected_employee_del}. Rows removed: {before_count - after_count}")
     else:
         st.info("No leave ranges found for this employee.")
+
 
 
