@@ -39,8 +39,9 @@ def save_leave_data(df):
     df["Date"] = df["Date"].dt.strftime("%Y-%m-%d")
     df.to_csv(DATA_FILE, index=False)
 
-# ✅ Group consecutive dates into ranges (FIXED)
+# ✅ FIXED: Group consecutive dates into ranges
 def get_leave_ranges(df, employee):
+    # Convert to datetime and drop invalid values
     emp_dates = sorted(pd.to_datetime(df[df["Employee"] == employee]["Date"], errors="coerce").dropna().tolist())
     ranges = []
     if emp_dates:
