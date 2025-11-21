@@ -17,7 +17,6 @@ botswana_holidays = set(pd.to_datetime(botswana_holidays_2025))
 # ✅ File for persistence
 DATA_FILE = "leave_data.csv"
 
-# ✅ Load data from CSV if exists
 def load_leave_data():
     if os.path.exists(DATA_FILE):
         df = pd.read_csv(DATA_FILE)
@@ -27,7 +26,6 @@ def load_leave_data():
         return df
     return pd.DataFrame(columns=["Employee", "Date"])
 
-# ✅ Save data to CSV
 def save_leave_data(df):
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
     df.dropna(subset=["Date"], inplace=True)
@@ -57,28 +55,23 @@ def get_leave_ranges(df, employee):
         ranges.append((start.date(), end.date()))
     return ranges
 
-# Sidebar for filters
+# Sidebar
 st.sidebar.header("Leave Planner")
 current_year = datetime.now().year
 year = st.sidebar.selectbox("Select Year", list(range(current_year - 5, current_year + 6)), index=5)
 
-# Employee selection
 employees = ["Katlego Moleko", "Tapiwa Mlotshwa", "Christopher Kuteeue", "Siyabonga File", "Tsholofelo Tembwe"]
 selected_employee = st.sidebar.selectbox("Select Employee", employees)
 
-# ✅ Date range selection
 leave_dates = st.sidebar.date_input("Select Leave Range", [], key="leave_range",
                                     min_value=datetime(year, 1, 1), max_value=datetime(year, 12, 31))
 
-# ✅ Initialize session state
 if "leave_data" not in st.session_state:
     st.session_state.leave_data = load_leave_data()
 
-# ✅ Ensure Date column is datetime globally
 st.session_state.leave_data["Date"] = pd.to_datetime(st.session_state.leave_data["Date"], errors="coerce")
 st.session_state.leave_data.dropna(subset=["Date"], inplace=True)
 
-# ✅ Add Leave and Save
 if st.sidebar.button("Add Leave"):
     if len(leave_dates) == 2:
         start_date, end_date = leave_dates
@@ -92,10 +85,8 @@ if st.sidebar.button("Add Leave"):
                 ], ignore_index=True)
         save_leave_data(st.session_state.leave_data)
 
-# ✅ Centered Titles
 st.markdown(f"<h2 style='text-align:center;'>IT LEAVE PLANNER - {year}</h2>", unsafe_allow_html=True)
 
-# Manager View toggle
 manager_view = st.sidebar.checkbox("Manager View")
 
 if manager_view:
@@ -134,9 +125,37 @@ if manager_view:
             leave_summary_df = pd.DataFrame(grouped_data, columns=["Name", "Leave From", "Leave End", "Duration"])
             st.table(leave_summary_df)
 else:
-    # ✅ Calendar formatted like example
+    # ✅ Calendar with containers
     st.markdown("<h3 style='text-align:center;'>Leave Calendar</h3>", unsafe_allow_html=True)
-    html = '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:20px;">'
+    html = """
+    <style>
+        .month-container {
+            background: #fff;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 10px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+        }
+        .calendar-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 20px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: center;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 6px;
+        }
+        th {
+            background: #f8f8f8;
+        }
+    </style>
+    """
+    html += '<div class="calendar-grid">'
     today = datetime.now().date()
     leave_dict = {}
     for _, row in st.session_state.leave_data.iterrows():
@@ -144,22 +163,21 @@ else:
 
     for month in range(1, 13):
         month_days = calendar.monthcalendar(year, month)
-        html += f'<div><h4 style="text-align:center;">{calendar.month_name[month]}</h4>'
-        html += "<table style='width:100%;border-collapse:collapse;text-align:center;'>"
-        html += "<tr>" + "".join([f"<th style='padding:4px;border:1px solid #ddd;'>{d}</th>" for d in ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]]) + "</tr>"
+        html += f'<div class="month-container"><h4 style="text-align:center;">{calendar.month_name[month]}</h4>'
+        html += "<table><tr>" + "".join([f"<th>{d}</th>" for d in ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]]) + "</tr>"
         
         for week in month_days:
             html += "<tr>"
             for i, day in enumerate(week):
                 if day == 0:
-                    html += "<td style='border:1px solid #ddd;padding:6px;'></td>"
+                    html += "<td></td>"
                 else:
                     date_obj = datetime(year, month, day).date()
-                    style = "padding:6px;border:1px solid #ddd;"
+                    style = ""
                     if date_obj in leave_dict:
-                        style += "font-weight:bold;"  # Highlight leave days
+                        style += "font-weight:bold;"
                     if date_obj == today:
-                        style += "border:2px solid #2ecc71;"  # Highlight today
+                        style += "border:2px solid #2ecc71;"
                     html += f"<td style='{style}'>{day}</td>"
             html += "</tr>"
         html += "</table></div>"
