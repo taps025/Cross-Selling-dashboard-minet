@@ -125,21 +125,20 @@ if manager_view:
             leave_summary_df = pd.DataFrame(grouped_data, columns=["Name", "Leave From", "Leave End", "Duration"])
             st.table(leave_summary_df)
 else:
-    # ✅ Calendar with containers
+    # ✅ Calendar styled like screenshot
     st.markdown("<h3 style='text-align:center;'>Leave Calendar</h3>", unsafe_allow_html=True)
     html = """
     <style>
-        .month-container {
-            background: #fff;
-            border: 1px solid #ddd;
-            border-radius: 8px;
-            padding: 10px;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.1);
-        }
         .calendar-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
             gap: 20px;
+        }
+        .month-box {
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 10px;
+            background: #fff;
         }
         table {
             width: 100%;
@@ -163,7 +162,7 @@ else:
 
     for month in range(1, 13):
         month_days = calendar.monthcalendar(year, month)
-        html += f'<div class="month-container"><h4 style="text-align:center;">{calendar.month_name[month]}</h4>'
+        html += f'<div class="month-box"><h4 style="text-align:center;">{calendar.month_name[month]}</h4>'
         html += "<table><tr>" + "".join([f"<th>{d}</th>" for d in ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]]) + "</tr>"
         
         for week in month_days:
