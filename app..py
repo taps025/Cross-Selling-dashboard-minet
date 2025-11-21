@@ -7,6 +7,13 @@ import os
 # ✅ Set wide layout
 st.set_page_config(layout="wide")
 
+# ✅ Botswana public holidays for 2025
+botswana_holidays_2025 = [
+    "2025-01-01", "2025-01-02", "2025-04-18", "2025-04-21", "2025-05-01", "2025-05-29",
+    "2025-07-01", "2025-07-21", "2025-07-22", "2025-09-30", "2025-10-01", "2025-12-25", "2025-12-26"
+]
+botswana_holidays = set(pd.to_datetime(botswana_holidays_2025))
+
 # ✅ File for persistence
 DATA_FILE = "leave_data.csv"
 
@@ -27,7 +34,13 @@ def save_leave_data(df):
     df["Date"] = df["Date"].dt.strftime("%Y-%m-%d")
     df.to_csv(DATA_FILE, index=False)
 
-# ✅ FIXED: Group consecutive dates into ranges
+# ✅ Calculate duration excluding weekends and holidays
+def calculate_leave_duration(start_date, end_date):
+    all_dates = pd.date_range(start=start_date, end=end_date)
+    valid_dates = [d for d in all_dates if d.weekday() < 5 and d not in botswana_holidays]
+    return len(valid_dates)
+
+# ✅ Group consecutive dates into ranges
 def get_leave_ranges(df, employee):
     emp_dates = sorted(pd.to_datetime(df[df["Employee"] == employee]["Date"], errors="coerce").dropna().tolist())
     ranges = []
@@ -111,12 +124,12 @@ if manager_view:
                     if emp_dates[i] == end + timedelta(days=1):
                         end = emp_dates[i]
                     else:
-                        duration = len(pd.date_range(start=start, end=end))
-                        grouped_data.append([emp, start.date(), end.date(), f"{duration} days"])
+                        duration = calculate_leave_duration(start, end)
+                        grouped_data.append([emp, start.date(), end.date(), f"{duration} working days"])
                         start = emp_dates[i]
                         end = emp_dates[i]
-                duration = len(pd.date_range(start=start, end=end))
-                grouped_data.append([emp, start.date(), end.date(), f"{duration} days"])
+                duration = calculate_leave_duration(start, end)
+                grouped_data.append([emp, start.date(), end.date(), f"{duration} working days"])
 
             leave_summary_df = pd.DataFrame(grouped_data, columns=["Name", "Leave From", "Leave End", "Duration"])
             st.table(leave_summary_df)
