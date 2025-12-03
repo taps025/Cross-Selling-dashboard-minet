@@ -24,6 +24,9 @@ BOTSWANA_HOLIDAYS = {
     "Boxing Day": "2025-12-26"
 }
 
+# Convert holiday strings → actual date objects
+HOLIDAY_DATES = {datetime.strptime(d, "%Y-%m-%d").date() for d in BOTSWANA_HOLIDAYS.values()}
+
 # ---------------------------------------------------------
 # STREAMLIT SETUP
 # ---------------------------------------------------------
@@ -48,6 +51,18 @@ def save_leave_data(df):
     df.dropna(subset=["Date"], inplace=True)
     df["Date"] = df["Date"].dt.strftime("%Y-%m-%d")
     df.to_csv(DATA_FILE, index=False)
+
+# ---------------------------------------------------------
+# WORKING DAY CALCULATOR (EXCLUDES WEEKENDS & HOLIDAYS)
+# ---------------------------------------------------------
+def working_days_between(start_date, end_date):
+    day_count = 0
+    d = start_date
+    while d <= end_date:
+        if d.weekday() < 5 and d not in HOLIDAY_DATES:  # Monday–Friday & not a holiday
+            day_count += 1
+        d += timedelta(days=1)
+    return day_count
 
 # ---------------------------------------------------------
 # GROUP CONSECUTIVE LEAVE DAYS
@@ -98,6 +113,7 @@ if st.sidebar.button("Add Leave"):
     if len(leave_dates) == 2:
         start_date, end_date = leave_dates
         all_dates = pd.date_range(start=start_date, end=end_date).tolist()
+
         for date in all_dates:
             if not ((st.session_state.leave_data["Employee"] == selected_employee) &
                     (st.session_state.leave_data["Date"] == pd.to_datetime(date))).any():
@@ -105,6 +121,7 @@ if st.sidebar.button("Add Leave"):
                     st.session_state.leave_data,
                     pd.DataFrame({"Employee": [selected_employee], "Date": [pd.to_datetime(date)]})
                 ], ignore_index=True)
+
         save_leave_data(st.session_state.leave_data)
 
 # ---------------------------------------------------------
@@ -115,7 +132,7 @@ st.markdown(f"<h2 style='text-align:center;'>IT LEAVE PLANNER - {year}</h2>", un
 manager_view = st.sidebar.checkbox("Manager View")
 
 # =========================================================
-# MANAGER VIEW
+# MANAGER VIEW (WITH WORKING-DAY CALCULATOR)
 # =========================================================
 if manager_view:
     if st.session_state.leave_data.empty:
@@ -145,19 +162,19 @@ if manager_view:
                     if emp_dates[i] == end + timedelta(days=1):
                         end = emp_dates[i]
                     else:
-                        duration = len(pd.date_range(start=start, end=end))
-                        grouped_data.append([emp, start.date(), end.date(), f"{duration} days"])
+                        wd = working_days_between(start.date(), end.date())
+                        grouped_data.append([emp, start.date(), end.date(), f"{wd} working days"])
                         start = emp_dates[i]
                         end = emp_dates[i]
 
-                duration = len(pd.date_range(start=start, end=end))
-                grouped_data.append([emp, start.date(), end.date(), f"{duration} days"])
+                wd = working_days_between(start.date(), end.date())
+                grouped_data.append([emp, start.date(), end.date(), f"{wd} working days"])
 
             leave_summary_df = pd.DataFrame(grouped_data, columns=["Name", "Leave From", "Leave End", "Duration"])
             st.table(leave_summary_df)
 
 # =========================================================
-# ENHANCED CALENDAR VIEW
+# ENHANCED CALENDAR VIEW (unchanged)
 # =========================================================
 else:
     st.markdown("<h3>📅 Enhanced Leave Calendar</h3>", unsafe_allow_html=True)
@@ -168,55 +185,23 @@ else:
     for _, row in st.session_state.leave_data.iterrows():
         leave_dict.setdefault(pd.to_datetime(row["Date"]).date(), []).append(row["Employee"])
 
-    holiday_dates = {datetime.strptime(date, "%Y-%m-%d").date(): name
-                     for name, date in BOTSWANA_HOLIDAYS.items()}
-
-    # CALENDAR CSS
+    # Styling
     st.markdown("""
     <style>
-    .calendar-container {
-        display: flex; flex-wrap: wrap;
-        gap: 20px;
-    }
-    .month-box {
-        flex: 1 0 22%;
-        padding: 10px;
-        border-radius: 12px;
-        border: 1px solid #ddd;
-        background: white;
-        box-shadow: 2px 2px 8px rgba(0,0,0,0.08);
-    }
-    .month-box table { width: 100%; border-collapse: collapse; }
-    .month-box th {
-        background: #fafafa;
-        padding: 5px;
-        border-radius: 6px;
-    }
-    .day-cell {
-        padding: 6px;
-        text-align: center;
-        border-radius: 8px;
-        transition: 0.2s;
-    }
-    .day-cell:hover {
-        transform: scale(1.15);
-        cursor: pointer;
-        box-shadow: 0px 0px 6px #bbb;
-    }
+    .calendar-container { display: flex; flex-wrap: wrap; gap: 20px; }
+    .month-box { flex: 1 0 22%; padding: 10px; border-radius: 12px; border: 1px solid #ddd;
+                 background: white; box-shadow: 2px 2px 8px rgba(0,0,0,0.08); }
+    .day-cell { padding: 6px; text-align: center; border-radius: 8px; }
     .holiday { background-color: #d8f5dd; font-weight: bold; }
     .weekend { background-color: #f2f2f2; }
     .leave-day { background-color: #ffb3b3; font-weight: bold; }
-    .today {
-        border: 2px solid #1e90ff;
-        box-shadow: 0px 0px 10px rgba(30,144,255,0.6);
-    }
+    .today { border: 2px solid #1e90ff; }
     </style>
     """, unsafe_allow_html=True)
 
-    # BUILD CALENDAR
     html = "<div class='calendar-container'>"
 
-    for month in range(1, 13):
+    for month in range(1, 12 + 1):
         month_days = calendar.monthcalendar(year, month)
         html += "<div class='month-box'>"
         html += f"<h4 style='text-align:center;'>{calendar.month_name[month]}</h4>"
@@ -235,9 +220,9 @@ else:
                     if i >= 5:
                         classes += " weekend"
 
-                    if date_obj in holiday_dates:
+                    if date_obj in HOLIDAY_DATES:
                         classes += " holiday"
-                        tooltip += f"Holiday: {holiday_dates[date_obj]}"
+                        tooltip = "Public Holiday"
 
                     if date_obj in leave_dict:
                         classes += " leave-day"
@@ -252,7 +237,6 @@ else:
         html += "</table></div>"
 
     html += "</div>"
-
     st.markdown(html, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -274,16 +258,13 @@ if not st.session_state.leave_data.empty:
             start_date = datetime.strptime(start_str, "%Y-%m-%d").date()
             end_date = datetime.strptime(end_str, "%Y-%m-%d").date()
 
-            before_count = len(st.session_state.leave_data)
             st.session_state.leave_data = st.session_state.leave_data[~(
                 (st.session_state.leave_data["Employee"] == selected_employee_del) &
                 (st.session_state.leave_data["Date"].dt.date >= start_date) &
                 (st.session_state.leave_data["Date"].dt.date <= end_date)
             )]
-            after_count = len(st.session_state.leave_data)
 
             save_leave_data(st.session_state.leave_data)
-            st.success(f"Deleted leave range {selected_range} for {selected_employee_del}. Rows removed: {before_count - after_count}")
+            st.success(f"Deleted leave range {selected_range} for {selected_employee_del}.")
     else:
         st.info("No leave ranges found for this employee.")
-
