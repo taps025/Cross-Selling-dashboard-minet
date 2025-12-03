@@ -5,25 +5,23 @@ from datetime import datetime
 CSV_FILE = "leave_data.csv"
 
 # -----------------------------
-# HOLIDAYS (correctly formatted)
+# HOLIDAYS (month, day) - year agnostic
 # -----------------------------
-HOLIDAYS = [
-    "2025-01-01",  # New Year's Day
-    "2025-01-02",  # New Year Holiday
-    "2025-04-02",  # Good Friday
-    "2025-05-05",  # Easter Monday
-    "2025-05-01",  # Labour Day
-    "2025-05-13",  # Ascension Day
-    "2025-07-01",  # Sir Seretse Khama Day
-    "2025-07-19",  # Presidents Day
-    "2025-07-20",  # Presidents Day Holiday
-  
-    "2025-10-01",  # Botswana Day Holiday
-    "2025-12-25",  # Christmas
-    "2025-12-26",  # Boxing Day
+HOLIDAYS_MD = [
+    (1, 1),    # New Year's Day
+    (1, 2),    # New Year Holiday
+    (4, 2),    # Good Friday
+    (5, 1),    # Labour Day
+    (5, 5),    # Easter Monday
+    (5, 13),   # Ascension Day
+    (7, 1),    # Sir Seretse Khama Day
+    (7, 19),   # Presidents Day
+    (7, 20),   # Presidents Day Holiday
+    (9, 30),   # Botswana Day
+    (10, 1),   # Botswana Day Holiday
+    (12, 25),  # Christmas
+    (12, 26),  # Boxing Day
 ]
-
-HOLIDAYS = pd.to_datetime(HOLIDAYS)
 
 # -----------------------------
 # LOAD & SAVE FUNCTIONS
@@ -46,8 +44,10 @@ def save_data(df):
 def calculate_leave_duration(start, end):
     # Generate all business days between start and end
     business_days = pd.bdate_range(start, end)
-    # Remove holidays
-    valid_days = [d for d in business_days if d not in HOLIDAYS]
+    
+    # Exclude holidays (year-agnostic)
+    valid_days = [day for day in business_days if (day.month, day.day) not in HOLIDAYS_MD]
+    
     return len(valid_days)
 
 # -----------------------------
@@ -134,4 +134,3 @@ elif menu == "Delete Leave Range":
                     df = df[~mask]
                     save_data(df)
                     st.success(f"Deleted {len(deleted)} leave entries for {employee}.")
-
