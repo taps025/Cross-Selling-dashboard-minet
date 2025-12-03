@@ -25,7 +25,7 @@ def save_data(df):
 # -----------------------------
 st.set_page_config(page_title="Leave Planner", layout="wide")
 
-st.title("📅 IT Leave Planner - 2025")
+st.title("IT LEAVE PLANNER")
 
 df = load_data()
 
@@ -110,3 +110,4 @@ elif menu == "Delete Leave Range":
                     df = df[~mask]
                     save_data(df)
                     st.success(f"Deleted {len(deleted)} leave entries for {employee}.")
+
