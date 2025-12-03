@@ -5,7 +5,7 @@ from datetime import datetime
 CSV_FILE = "leave_data.csv"
 
 # -----------------------------
-# HOLIDAYS (full list provided)
+# HOLIDAYS (correctly formatted)
 # -----------------------------
 HOLIDAYS = [
     "2025-01-01",  # New Year's Day
