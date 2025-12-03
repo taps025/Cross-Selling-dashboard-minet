@@ -56,7 +56,7 @@ st.set_page_config(page_title="Leave Planner", layout="wide")
 st.title("📅 IT LEAVE PLANNER")
 
 df = load_data()
-menu = st.sidebar.radio("Menu", ["Add Leave", "Leave Schedule", "Delete Leave Range"])
+menu = st.sidebar.radio("MENU", ["ADD LEAVE", "LEAVE SCHEDULE", "DELETE LEAVE RANGE"])
 
 # -------------------------------------------------------
 # 1️⃣ ADD LEAVE
@@ -133,3 +133,4 @@ elif menu == "Delete Leave Range":
                     df = df[~mask]
                     save_data(df)
                     st.success(f"Deleted {len(deleted)} leave entries for {employee}.")
+
