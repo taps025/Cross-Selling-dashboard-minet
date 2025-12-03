@@ -1,8 +1,17 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
+import os
 
-CSV_FILE = "leave_data.csv"
+# -----------------------------
+# FILE SETUP
+# -----------------------------
+CSV_FILE = os.path.join(os.getcwd(), "leave_data.csv")
+
+# Ensure CSV exists
+if not os.path.exists(CSV_FILE):
+    pd.DataFrame(columns=["Name", "Leave From", "Leave End", "Duration"]).to_csv(CSV_FILE, index=False)
+
 
 # -----------------------------
 # HOLIDAYS (month, day) - year agnostic
@@ -26,17 +35,17 @@ HOLIDAYS_MD = [
 # -----------------------------
 # LOAD & SAVE FUNCTIONS
 # -----------------------------
+@st.cache_data
 def load_data():
-    try:
-        df = pd.read_csv(CSV_FILE)
-        df["Leave From"] = pd.to_datetime(df["Leave From"], errors="coerce")
-        df["Leave End"] = pd.to_datetime(df["Leave End"], errors="coerce")
-        return df
-    except:
-        return pd.DataFrame(columns=["Name", "Leave From", "Leave End", "Duration"])
+    df = pd.read_csv(CSV_FILE)
+    df["Leave From"] = pd.to_datetime(df["Leave From"], errors="coerce")
+    df["Leave End"] = pd.to_datetime(df["Leave End"], errors="coerce")
+    return df
 
 def save_data(df):
     df.to_csv(CSV_FILE, index=False)
+    load_data.clear()  # refresh cache
+
 
 # -----------------------------
 # CALCULATE DURATION EXCLUDING WEEKENDS & HOLIDAYS
@@ -44,10 +53,16 @@ def save_data(df):
 def calculate_leave_duration(start, end):
     total_days = pd.date_range(start, end)
     valid_days = []
+
     for day in total_days:
-        if day.weekday() < 5 and (day.month, day.day) not in HOLIDAYS_MD:
+        is_weekday = day.weekday() < 5
+        is_holiday = (day.month, day.day) in HOLIDAYS_MD
+
+        if is_weekday and not is_holiday:
             valid_days.append(day)
+
     return len(valid_days)
+
 
 # -----------------------------
 # STREAMLIT UI
@@ -58,10 +73,11 @@ st.title("📅 IT LEAVE PLANNER")
 df = load_data()
 menu = st.sidebar.radio("MENU", ["ADD LEAVE", "LEAVE SCHEDULE", "DELETE LEAVE RANGE"])
 
+
 # -------------------------------------------------------
 # 1️⃣ ADD LEAVE
 # -------------------------------------------------------
-if menu == "Add Leave":
+if menu == "ADD LEAVE":
     st.header("➕ Add Leave")
 
     name = st.text_input("Employee Name")
@@ -87,21 +103,27 @@ if menu == "Add Leave":
             save_data(df)
             st.success(f"Leave added for {name} ({duration} working days)")
 
+
 # -------------------------------------------------------
 # 2️⃣ LEAVE SCHEDULE
 # -------------------------------------------------------
-elif menu == "Leave Schedule":
+elif menu == "LEAVE SCHEDULE":
     st.header("📘 Leave Schedule")
+    df = load_data()  # reload from CSV
+
     if df.empty:
         st.info("No leave data available.")
     else:
         st.dataframe(df)
 
+
 # -------------------------------------------------------
 # 3️⃣ DELETE LEAVE RANGE
 # -------------------------------------------------------
-elif menu == "Delete Leave Range":
+elif menu == "DELETE LEAVE RANGE":
     st.header("🗑️ Delete Leave Range")
+
+    df = load_data()
 
     if df.empty:
         st.warning("No data to delete.")
@@ -133,5 +155,3 @@ elif menu == "Delete Leave Range":
                     df = df[~mask]
                     save_data(df)
                     st.success(f"Deleted {len(deleted)} leave entries for {employee}.")
-
-
