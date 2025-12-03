@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 
 CSV_FILE = "leave_data.csv"
 
@@ -42,12 +42,11 @@ def save_data(df):
 # CALCULATE DURATION EXCLUDING WEEKENDS & HOLIDAYS
 # -----------------------------
 def calculate_leave_duration(start, end):
-    # Generate all business days between start and end
-    business_days = pd.bdate_range(start, end)
-    
-    # Exclude holidays (year-agnostic)
-    valid_days = [day for day in business_days if (day.month, day.day) not in HOLIDAYS_MD]
-    
+    total_days = pd.date_range(start, end)
+    valid_days = []
+    for day in total_days:
+        if day.weekday() < 5 and (day.month, day.day) not in HOLIDAYS_MD:
+            valid_days.append(day)
     return len(valid_days)
 
 # -----------------------------
