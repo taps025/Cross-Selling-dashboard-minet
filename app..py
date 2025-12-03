@@ -17,7 +17,7 @@ HOLIDAYS = [
     "2025-07-01",  # Sir Seretse Khama Day
     "2025-07-19",  # Presidents Day
     "2025-07-20",  # Presidents Day Holiday
-    "2025-09-30",  # Botswana Day
+  
     "2025-10-01",  # Botswana Day Holiday
     "2025-12-25",  # Christmas
     "2025-12-26",  # Boxing Day
@@ -134,3 +134,4 @@ elif menu == "Delete Leave Range":
                     df = df[~mask]
                     save_data(df)
                     st.success(f"Deleted {len(deleted)} leave entries for {employee}.")
+
