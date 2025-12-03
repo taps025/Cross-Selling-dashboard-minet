@@ -5,6 +5,29 @@ from datetime import datetime, timedelta
 CSV_FILE = "leave_data.csv"
 
 # -----------------------------
+# HOLIDAYS (customize as needed)
+# -----------------------------
+HOLIDAYS = [
+    "2025-01-01",  # New Year's Day
+    "2025-01-02",  #New Year Holiday
+    "2025-04-02",  # Good Friday
+    "2025-05-05",  # Easter Monday
+    "2025-05-01",  #Labour day
+    "2025-05-13",  #Ascension day
+    "2025-07-01",  #Sir Seretse Khama Day
+    "2025-07-19",  # Presidents Day
+    "2025-07-20",  #Presidents Day Holiday
+    "2025-09-30", Botswana Day
+    "2025-10-01", Botswana Day Holiday
+    "2025-12-25",  # Christmas
+    "2025-12-26",  # Boxing Day
+    
+    
+]
+
+HOLIDAYS = pd.to_datetime(HOLIDAYS)
+
+# -----------------------------
 # LOAD & SAVE FUNCTIONS
 # -----------------------------
 def load_data():
@@ -19,16 +42,23 @@ def load_data():
 def save_data(df):
     df.to_csv(CSV_FILE, index=False)
 
+# -----------------------------
+# CALCULATE DURATION EXCLUDING WEEKENDS & HOLIDAYS
+# -----------------------------
+def calculate_leave_duration(start, end):
+    # Business days only
+    all_days = pd.bdate_range(start, end)
+    # Exclude custom holidays
+    working_days = [d for d in all_days if d not in HOLIDAYS]
+    return len(working_days)
 
 # -----------------------------
 # STREAMLIT UI
 # -----------------------------
 st.set_page_config(page_title="Leave Planner", layout="wide")
-
-st.title("📅IT LEAVE PLANNER ")
+st.title("📅 IT LEAVE PLANNER")
 
 df = load_data()
-
 menu = st.sidebar.radio("Menu", ["Add Leave", "Leave Schedule", "Delete Leave Range"])
 
 # -------------------------------------------------------
@@ -48,7 +78,7 @@ if menu == "Add Leave":
         if le < lf:
             st.error("End date cannot be before start date.")
         else:
-            duration = (le - lf).days + 1
+            duration = calculate_leave_duration(lf, le)
             new_row = pd.DataFrame([{
                 "Name": name,
                 "Leave From": lf,
@@ -58,9 +88,7 @@ if menu == "Add Leave":
 
             df = pd.concat([df, new_row], ignore_index=True)
             save_data(df)
-
-            st.success(f"Leave added for {name}")
-
+            st.success(f"Leave added for {name} ({duration} working days)")
 
 # -------------------------------------------------------
 # 2️⃣ LEAVE SCHEDULE
@@ -72,9 +100,8 @@ elif menu == "Leave Schedule":
     else:
         st.dataframe(df)
 
-
 # -------------------------------------------------------
-# 3️⃣ DELETE LEAVE RANGE (FIXED VERSION)
+# 3️⃣ DELETE LEAVE RANGE
 # -------------------------------------------------------
 elif menu == "Delete Leave Range":
     st.header("🗑️ Delete Leave Range")
@@ -95,7 +122,7 @@ elif menu == "Delete Leave Range":
                 sd = pd.to_datetime(start_date)
                 ed = pd.to_datetime(end_date)
 
-                # FIXED: ensure comparison uses datetime only
+                # Ensure comparison uses datetime only
                 mask = (
                     (df["Name"] == employee)
                     & (df["Leave From"] <= ed)
@@ -110,5 +137,3 @@ elif menu == "Delete Leave Range":
                     df = df[~mask]
                     save_data(df)
                     st.success(f"Deleted {len(deleted)} leave entries for {employee}.")
-
-
