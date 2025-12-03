@@ -1,28 +1,26 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
 
 CSV_FILE = "leave_data.csv"
 
 # -----------------------------
-# HOLIDAYS (customize as needed)
+# HOLIDAYS (full list provided)
 # -----------------------------
 HOLIDAYS = [
     "2025-01-01",  # New Year's Day
-    "2025-01-02",  #New Year Holiday
+    "2025-01-02",  # New Year Holiday
     "2025-04-02",  # Good Friday
     "2025-05-05",  # Easter Monday
-    "2025-05-01",  #Labour day
-    "2025-05-13",  #Ascension day
-    "2025-07-01",  #Sir Seretse Khama Day
+    "2025-05-01",  # Labour Day
+    "2025-05-13",  # Ascension Day
+    "2025-07-01",  # Sir Seretse Khama Day
     "2025-07-19",  # Presidents Day
-    "2025-07-20",  #Presidents Day Holiday
-    "2025-09-30", Botswana Day
-    "2025-10-01", Botswana Day Holiday
+    "2025-07-20",  # Presidents Day Holiday
+    "2025-09-30",  # Botswana Day
+    "2025-10-01",  # Botswana Day Holiday
     "2025-12-25",  # Christmas
     "2025-12-26",  # Boxing Day
-    
-    
 ]
 
 HOLIDAYS = pd.to_datetime(HOLIDAYS)
@@ -46,11 +44,11 @@ def save_data(df):
 # CALCULATE DURATION EXCLUDING WEEKENDS & HOLIDAYS
 # -----------------------------
 def calculate_leave_duration(start, end):
-    # Business days only
-    all_days = pd.bdate_range(start, end)
-    # Exclude custom holidays
-    working_days = [d for d in all_days if d not in HOLIDAYS]
-    return len(working_days)
+    # Generate all business days between start and end
+    business_days = pd.bdate_range(start, end)
+    # Remove holidays
+    valid_days = [d for d in business_days if d not in HOLIDAYS]
+    return len(valid_days)
 
 # -----------------------------
 # STREAMLIT UI
@@ -83,7 +81,7 @@ if menu == "Add Leave":
                 "Name": name,
                 "Leave From": lf,
                 "Leave End": le,
-                "Duration": f"{duration} days"
+                "Duration": f"{duration} working days"
             }])
 
             df = pd.concat([df, new_row], ignore_index=True)
@@ -122,7 +120,6 @@ elif menu == "Delete Leave Range":
                 sd = pd.to_datetime(start_date)
                 ed = pd.to_datetime(end_date)
 
-                # Ensure comparison uses datetime only
                 mask = (
                     (df["Name"] == employee)
                     & (df["Leave From"] <= ed)
