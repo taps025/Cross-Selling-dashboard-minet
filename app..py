@@ -80,7 +80,7 @@ if menu == "Add Leave":
                 "Name": name,
                 "Leave From": lf,
                 "Leave End": le,
-                "Duration": f"{duration} working days"
+                "Duration": f"{duration} days"
             }])
 
             df = pd.concat([df, new_row], ignore_index=True)
@@ -133,4 +133,5 @@ elif menu == "Delete Leave Range":
                     df = df[~mask]
                     save_data(df)
                     st.success(f"Deleted {len(deleted)} leave entries for {employee}.")
+
 
