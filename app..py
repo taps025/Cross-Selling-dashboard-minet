@@ -1,153 +1,47 @@
-import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
-import os
+from supabase import create_client, Client
 
 # -----------------------------
-# PERMANENT FILE STORAGE
+# SUPABASE CONFIGURATION
 # -----------------------------
-CSV_FILE = os.path.join(os.path.expanduser("~"), "leave_data.csv")
+SUPABASE_URL = "https://wxxhmbxsdtxobtjbckhl.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind4eGhtYnhzZHR4b2J0amJja2hsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ3OTE3ODAsImV4cCI6MjA4MDM2Nzc4MH0.lKFr4VEGY71M00yo6x1hbCr_iX2MIiG_2Qrnh2Yr_rk"
 
-# Create file if missing
-if not os.path.exists(CSV_FILE):
-    pd.DataFrame(columns=["Name", "Leave From", "Leave End", "Duration"]).to_csv(CSV_FILE, index=False)
-
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # -----------------------------
-# HOLIDAYS (MONTH, DAY ONLY)
+# READ OLD CSV
 # -----------------------------
-HOLIDAYS_MD = [
-    (1, 1), (1, 2),
-    (4, 2),
-    (5, 1), (5, 5), (5, 13),
-    (7, 1), (7, 19), (7, 20),
-    (9, 30),
-    (10, 1),
-    (12, 25), (12, 26)
-]
+CSV_FILE = "leave_data.csv"  # Path to your old CSV
 
-# -----------------------------
-# LOAD & SAVE FUNCTIONS
-# -----------------------------
-@st.cache_data
-def load_data():
-    df = pd.read_csv(CSV_FILE)
-    df["Leave From"] = pd.to_datetime(df["Leave From"], errors="coerce")
-    df["Leave End"] = pd.to_datetime(df["Leave End"], errors="coerce")
-    return df
+df = pd.read_csv(CSV_FILE)
 
+# Make sure columns are correct
+df = df.rename(columns={
+    "Name": "name",
+    "Leave From": "leave_from",
+    "Leave End": "leave_end",
+    "Duration": "duration"
+})
 
-def save_data(df):
-    df.to_csv(CSV_FILE, index=False)
-    load_data.clear()  # refresh cache
+# Convert dates to proper format
+df["leave_from"] = pd.to_datetime(df["leave_from"]).dt.date
+df["leave_end"] = pd.to_datetime(df["leave_end"]).dt.date
 
+# Convert duration to integer if it has " days" text
+df["duration"] = df["duration"].astype(str).str.replace(" days", "").astype(int)
 
 # -----------------------------
-# CALCULATE WORKING DAYS
+# INSERT INTO SUPABASE
 # -----------------------------
-def calculate_leave_duration(start, end):
-    total_days = pd.date_range(start, end)
-    valid_days = []
+for _, row in df.iterrows():
+    supabase.table("leave_records").insert({
+        "name": row["name"],
+        "leave_from": row["leave_from"],
+        "leave_end": row["leave_end"],
+        "duration": row["duration"]
+    }).execute()
 
-    for day in total_days:
-        weekday = day.weekday() < 5
-        holiday = (day.month, day.day) in HOLIDAYS_MD
-        if weekday and not holiday:
-            valid_days.append(day)
-
-    return len(valid_days)
-
-
-# -----------------------------
-# STREAMLIT UI
-# -----------------------------
-st.set_page_config(page_title="Leave Planner", layout="wide")
-st.title("📅 IT LEAVE PLANNER")
-
-df = load_data()
-menu = st.sidebar.radio("MENU", ["ADD LEAVE", "LEAVE SCHEDULE", "DELETE LEAVE RANGE"])
-
-
-# -------------------------------------------------------
-# 1️⃣ ADD LEAVE
-# -------------------------------------------------------
-if menu == "ADD LEAVE":
-    st.header("➕ Add Leave")
-
-    name = st.text_input("Employee Name")
-    leave_from = st.date_input("Leave From")
-    leave_end = st.date_input("Leave End")
-
-    if st.button("Save Leave"):
-        lf = pd.to_datetime(leave_from)
-        le = pd.to_datetime(leave_end)
-
-        if le < lf:
-            st.error("End date cannot be before start date.")
-        else:
-            duration = calculate_leave_duration(lf, le)
-            new_row = pd.DataFrame([{
-                "Name": name,
-                "Leave From": lf,
-                "Leave End": le,
-                "Duration": f"{duration} days"
-            }])
-
-            df = pd.concat([df, new_row], ignore_index=True)
-            save_data(df)
-            st.success(f"Leave added for {name} ({duration} working days)")
-
-
-# -------------------------------------------------------
-# 2️⃣ LEAVE SCHEDULE
-# -------------------------------------------------------
-elif menu == "LEAVE SCHEDULE":
-    st.header("📘 Leave Schedule")
-    df = load_data()
-
-    if df.empty:
-        st.info("No leave data available.")
-    else:
-        st.dataframe(df)
-
-
-# -------------------------------------------------------
-# 3️⃣ DELETE LEAVE RANGE
-# -------------------------------------------------------
-elif menu == "DELETE LEAVE RANGE":
-    st.header("🗑️ Delete Leave Range")
-
-    df = load_data()
-
-    if df.empty:
-        st.warning("No data to delete.")
-    else:
-        employees = df["Name"].unique()
-        employee = st.selectbox("Select Employee", employees)
-
-        start_date = st.date_input("Start of Range")
-        end_date = st.date_input("End of Range")
-
-        if start_date > end_date:
-            st.error("Start date cannot be after end date.")
-        else:
-            if st.button("Delete Leave Entries"):
-                sd = pd.to_datetime(start_date)
-                ed = pd.to_datetime(end_date)
-
-                mask = (
-                    (df["Name"] == employee)
-                    & (df["Leave From"] <= ed)
-                    & (df["Leave End"] >= sd)
-                )
-
-                deleted = df[mask]
-
-                if deleted.empty:
-                    st.warning("No matching leave entries found.")
-                else:
-                    df = df[~mask]
-                    save_data(df)
-                    st.success(f"Deleted {len(deleted)} leave entries for {employee}.")
+print(f"✅ Migrated {len(df)} leave records to Supabase successfully!")
 
 
