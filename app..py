@@ -4,32 +4,26 @@ from datetime import datetime, timedelta
 import os
 
 # -----------------------------
-# FILE SETUP
+# PERMANENT FILE STORAGE
 # -----------------------------
-CSV_FILE = os.path.join(os.getcwd(), "leave_data.csv")
+CSV_FILE = os.path.join(os.path.expanduser("~"), "leave_data.csv")
 
-# Ensure CSV exists
+# Create file if missing
 if not os.path.exists(CSV_FILE):
     pd.DataFrame(columns=["Name", "Leave From", "Leave End", "Duration"]).to_csv(CSV_FILE, index=False)
 
 
 # -----------------------------
-# HOLIDAYS (month, day) - year agnostic
+# HOLIDAYS (MONTH, DAY ONLY)
 # -----------------------------
 HOLIDAYS_MD = [
-    (1, 1),    # New Year's Day
-    (1, 2),    # New Year Holiday
-    (4, 2),    # Good Friday
-    (5, 1),    # Labour Day
-    (5, 5),    # Easter Monday
-    (5, 13),   # Ascension Day
-    (7, 1),    # Sir Seretse Khama Day
-    (7, 19),   # Presidents Day
-    (7, 20),   # Presidents Day Holiday
-    (9, 30),   # Botswana Day
-    (10, 1),   # Botswana Day Holiday
-    (12, 25),  # Christmas
-    (12, 26),  # Boxing Day
+    (1, 1), (1, 2),
+    (4, 2),
+    (5, 1), (5, 5), (5, 13),
+    (7, 1), (7, 19), (7, 20),
+    (9, 30),
+    (10, 1),
+    (12, 25), (12, 26)
 ]
 
 # -----------------------------
@@ -42,23 +36,23 @@ def load_data():
     df["Leave End"] = pd.to_datetime(df["Leave End"], errors="coerce")
     return df
 
+
 def save_data(df):
     df.to_csv(CSV_FILE, index=False)
     load_data.clear()  # refresh cache
 
 
 # -----------------------------
-# CALCULATE DURATION EXCLUDING WEEKENDS & HOLIDAYS
+# CALCULATE WORKING DAYS
 # -----------------------------
 def calculate_leave_duration(start, end):
     total_days = pd.date_range(start, end)
     valid_days = []
 
     for day in total_days:
-        is_weekday = day.weekday() < 5
-        is_holiday = (day.month, day.day) in HOLIDAYS_MD
-
-        if is_weekday and not is_holiday:
+        weekday = day.weekday() < 5
+        holiday = (day.month, day.day) in HOLIDAYS_MD
+        if weekday and not holiday:
             valid_days.append(day)
 
     return len(valid_days)
@@ -109,7 +103,7 @@ if menu == "ADD LEAVE":
 # -------------------------------------------------------
 elif menu == "LEAVE SCHEDULE":
     st.header("📘 Leave Schedule")
-    df = load_data()  # reload from CSV
+    df = load_data()
 
     if df.empty:
         st.info("No leave data available.")
@@ -155,3 +149,5 @@ elif menu == "DELETE LEAVE RANGE":
                     df = df[~mask]
                     save_data(df)
                     st.success(f"Deleted {len(deleted)} leave entries for {employee}.")
+
+
