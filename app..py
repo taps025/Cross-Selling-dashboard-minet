@@ -1,9 +1,9 @@
 
+
 #!/usr/bin/env python3
-# leave_tracker.py
 import json
 import os
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import List, Dict, Any, Optional
 
 DATA_FILE = "leave_records.json"
@@ -11,7 +11,7 @@ HOLIDAYS_FILE = "public_holidays.json"
 EXPORT_CSV = "leave_records_export.csv"
 
 # -----------------------------
-# File I/O
+# File Handling
 # -----------------------------
 def _ensure_file(path: str, default):
     if not os.path.exists(path):
@@ -33,13 +33,12 @@ def _load_holidays() -> Dict[str, str]:
         return json.load(f)
 
 # -----------------------------
-# Date helpers
+# Helpers
 # -----------------------------
 def _next_id(records: List[Dict[str, Any]]) -> int:
     return (max(r["id"] for r in records) + 1) if records else 1
 
 def _to_date(value: str) -> date:
-    # Accepts YYYY-MM-DD (ISO)
     return date.fromisoformat(value)
 
 def _iso(d: date) -> str:
@@ -49,44 +48,22 @@ def _overlaps(a_start: date, a_end: date, b_start: date, b_end: date) -> bool:
     return not (a_end < b_start or a_start > b_end)
 
 # -----------------------------
-# Duration calculators
+# Duration Calculation
 # -----------------------------
-def _calc_business_days(start: date, end: date) -> int:
-    """
-    Business days between start and end (inclusive), excluding weekends.
-    """
-    if end < start:
-        return 0
-    total_days = (end - start).days + 1
-    weeks, remainder = divmod(total_days, 7)
-    business_days = weeks * 5
-    for i in range(remainder):
-        d = start + timedelta(days=i)
-        if d.weekday() < 5:  # Monday=0 ... Friday=4
-            business_days += 1
-    return business_days
-
 def _calc_business_days_excl_holidays(start: date, end: date, holidays_dict: Dict[str, str]) -> int:
-    """
-    Business days minus holidays. Only subtracts holidays that fall on weekdays in the range.
-    'holidays_dict' maps holiday name -> "YYYY-MM-DD".
-    """
     if end < start:
         return 0
 
     # Base business days (Mon-Fri)
-    business_days = _calc_business_days(start, end)
+    business_days = 0
+    d = start
+    while d <= end:
+        if d.weekday() < 5:  # Mon-Fri
+            business_days += 1
+        d += timedelta(days=1)
 
-    # Normalize holiday dates
-    holiday_dates = set()
-    for _, iso in holidays_dict.items():
-        try:
-            holiday_dates.add(date.fromisoformat(iso))
-        except ValueError:
-            # Skip malformed date strings
-            continue
-
-    # Subtract only if the holiday falls on a weekday within range
+    # Subtract holidays that fall on weekdays
+    holiday_dates = {date.fromisoformat(v) for v in holidays_dict.values()}
     for h in holiday_dates:
         if start <= h <= end and h.weekday() < 5:
             business_days -= 1
@@ -94,7 +71,7 @@ def _calc_business_days_excl_holidays(start: date, end: date, holidays_dict: Dic
     return max(business_days, 0)
 
 # -----------------------------
-# Core CRUD
+# CRUD Operations
 # -----------------------------
 def add_leave(name: str, leave_from: str, leave_end: str, duration: Optional[int] = None):
     records = _load_records()
@@ -105,39 +82,29 @@ def add_leave(name: str, leave_from: str, leave_end: str, duration: Optional[int
     if end < start:
         raise ValueError("leave_end cannot be before leave_from")
 
-    # Duration: business days minus holidays (unless explicitly provided)
-    if duration is None:
-        dur = _calc_business_days_excl_holidays(start, end, holidays)
-    else:
-        dur = int(duration)
+    dur = duration if duration else _calc_business_days_excl_holidays(start, end, holidays)
 
-    # Overlap check for same person (by name, case-insensitive)
+    # Overlap check
     for r in records:
-        if r["name"].strip().lower() == name.strip().lower():
+        if r["name"].lower() == name.lower():
             if _overlaps(start, end, _to_date(r["leave_from"]), _to_date(r["leave_end"])):
-                raise ValueError(
-                    f"Overlap detected with record id {r['id']} "
-                    f"({r['leave_from']} to {r['leave_end']}) for {name}."
-                )
+                raise ValueError(f"Overlap detected with record id {r['id']} ({r['leave_from']} to {r['leave_end']})")
 
     new_rec = {
         "id": _next_id(records),
         "name": name.strip(),
         "leave_from": _iso(start),
         "leave_end": _iso(end),
-        "duration": dur  # business days minus holidays
+        "duration": dur
     }
     records.append(new_rec)
-    # Keep records ordered by start date
     records.sort(key=lambda x: x["leave_from"])
     _save_records(records)
     return new_rec
 
 def list_leaves(name: Optional[str] = None) -> List[Dict[str, Any]]:
     records = _load_records()
-    if name:
-        return [r for r in records if r["name"].strip().lower() == name.strip().lower()]
-    return records
+    return [r for r in records if not name or r["name"].lower() == name.lower()]
 
 def update_leave(record_id: int, **fields):
     records = _load_records()
@@ -146,38 +113,17 @@ def update_leave(record_id: int, **fields):
     if idx is None:
         raise ValueError(f"No record with id {record_id}")
 
-    current = records[idx].copy()
+    current = records[idx]
+    if fields.get("name"): current["name"] = fields["name"]
+    if fields.get("leave_from"): current["leave_from"] = fields["leave_from"]
+    if fields.get("leave_end"): current["leave_end"] = fields["leave_end"]
 
-    # Apply field changes
-    if "name" in fields and fields["name"] is not None:
-        current["name"] = str(fields["name"]).strip()
-
-    if "leave_from" in fields and fields["leave_from"] is not None:
-        current["leave_from"] = str(fields["leave_from"])
-    if "leave_end" in fields and fields["leave_end"] is not None:
-        current["leave_end"] = str(fields["leave_end"])
-
-    # Recalculate duration if dates changed (or duration provided)
     start = _to_date(current["leave_from"])
     end = _to_date(current["leave_end"])
     if end < start:
         raise ValueError("leave_end cannot be before leave_from")
 
-    if "duration" in fields and fields["duration"] is not None:
-        current["duration"] = int(fields["duration"])
-    else:
-        current["duration"] = _calc_business_days_excl_holidays(start, end, holidays)
-
-    # Overlap check within same person excluding this record
-    for r in records:
-        if r["id"] == record_id:
-            continue
-        if r["name"].strip().lower() == current["name"].strip().lower():
-            if _overlaps(start, end, _to_date(r["leave_from"]), _to_date(r["leave_end"])):
-                raise ValueError(
-                    f"Overlap detected with record id {r['id']} "
-                    f"({r['leave_from']} to {r['leave_end']}) for {current['name']}."
-                )
+    current["duration"] = fields.get("duration") or _calc_business_days_excl_holidays(start, end, holidays)
 
     records[idx] = current
     records.sort(key=lambda x: x["leave_from"])
@@ -204,52 +150,44 @@ def export_csv(path: str = EXPORT_CSV):
     with open(path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=["id", "name", "leave_from", "leave_end", "duration"])
         writer.writeheader()
-        for r in records:
-            writer.writerow(r)
+        writer.writerows(records)
     print(f"Exported {len(records)} rows to {path}")
 
 def print_table(rows: List[Dict[str, Any]]):
     if not rows:
         print("(no records)")
         return
-    widths = {
-        "id": max(len("id"), max(len(str(r["id"])) for r in rows)),
-        "name": max(len("name"), max(len(r["name"]) for r in rows)),
-        "leave_from": len("leave_from"),
-        "leave_end": len("leave_end"),
-        "duration": len("duration")
-    }
-    header = f"{'id':>{widths['id']}}  {'name':<{widths['name']}}  {'leave_from':<10}  {'leave_end':<10}  {'duration':>8}"
-    print(header)
-    print("-" * len(header))
+    print("\n=== LEAVE TRACKER (Business Days Minus Holidays) ===\n")
+    print(f"{'ID':<4} {'Name':<20} {'From':<12} {'To':<12} {'Duration':<8}")
+    print("-" * 60)
     for r in rows:
-        print(f"{r['id']:>{widths['id']}}  {r['name']:<{widths['name']}}  {r['leave_from']:<10}  {r['leave_end']:<10}  {r['duration']:>8}")
+        print(f"{r['id']:<4} {r['name']:<20} {r['leave_from']:<12} {r['leave_end']:<12} {r['duration']:<8}")
 
 def cli():
     import argparse
-    parser = argparse.ArgumentParser(description="Local Leave Tracker (Business days minus holidays)")
+    parser = argparse.ArgumentParser(description="Leave Tracker CLI")
     sub = parser.add_subparsers(dest="cmd")
 
-    addp = sub.add_parser("add", help="Add a leave record")
+    addp = sub.add_parser("add")
     addp.add_argument("--name", required=True)
-    addp.add_argument("--from", dest="leave_from", required=True, help="YYYY-MM-DD")
-    addp.add_argument("--to", dest="leave_end", required=True, help="YYYY-MM-DD")
-    addp.add_argument("--duration", type=int, help="Optional; overrides auto calculation")
+    addp.add_argument("--from", dest="leave_from", required=True)
+    addp.add_argument("--to", dest="leave_end", required=True)
+    addp.add_argument("--duration", type=int)
 
-    listp = sub.add_parser("list", help="List records")
-    listp.add_argument("--name", help="Filter by name")
+    listp = sub.add_parser("list")
+    listp.add_argument("--name")
 
-    upd = sub.add_parser("update", help="Update a record")
+    upd = sub.add_parser("update")
     upd.add_argument("--id", type=int, required=True)
     upd.add_argument("--name")
     upd.add_argument("--from", dest="leave_from")
     upd.add_argument("--to", dest="leave_end")
     upd.add_argument("--duration", type=int)
 
-    dele = sub.add_parser("delete", help="Delete a record")
+    dele = sub.add_parser("delete")
     dele.add_argument("--id", type=int, required=True)
 
-    exp = sub.add_parser("export", help="Export to CSV")
+    exp = sub.add_parser("export")
     exp.add_argument("--out", default=EXPORT_CSV)
 
     args = parser.parse_args()
@@ -258,8 +196,7 @@ def cli():
             rec = add_leave(args.name, args.leave_from, args.leave_end, args.duration)
             print("✅ Added:", rec)
         elif args.cmd == "list":
-            rows = list_leaves(args.name)
-            print_table(rows)
+            print_table(list_leaves(args.name))
         elif args.cmd == "update":
             updates = {k: v for k, v in {
                 "name": args.name,
@@ -281,3 +218,4 @@ def cli():
 
 if __name__ == "__main__":
     cli()
+
