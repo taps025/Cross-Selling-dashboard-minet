@@ -18,10 +18,10 @@ df = pd.read_csv(CSV_FILE)
 
 # Make sure columns are correct
 df = df.rename(columns={
-    "Name": "name",
-    "Leave From": "leave_from",
-    "Leave End": "leave_end",
-    "Duration": "duration"
+    "Name": "Name",
+    "Leave From": "Leave From",
+    "Leave End": "Leave end",
+    "Duration": "Duration"
 })
 
 # Convert dates to proper format
@@ -43,5 +43,6 @@ for _, row in df.iterrows():
     }).execute()
 
 print(f"✅ Migrated {len(df)} leave records to Supabase successfully!")
+
 
 
