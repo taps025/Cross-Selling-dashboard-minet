@@ -9,7 +9,7 @@ import time
 API_URL = "https://api-6z3n.onrender.com/data"
 UPDATE_URL = "https://api-6z3n.onrender.com/update"
 
-# ✅ Helper: canonicalize names sent to API (no UI change)
+# ✅ Canonicalization helper (ONLY affects what we send to API, not your UI)
 def canonicalize(name: str) -> str:
     """Remove punctuation and normalize case for API keys."""
     if not isinstance(name, str):
@@ -60,7 +60,7 @@ with col1:
 with col2:
     st.markdown("<h1 style='color:#2C3E50;'>OFFICE OF THE CUSTOMER DASHBOARD</h1>", unsafe_allow_html=True)
 
-# ✅ Fetch data from API (with cache-busting; no UI change)
+# ✅ Fetch data from API (add cache-busting to avoid stale data)
 try:
     response = requests.get(
         API_URL,
@@ -69,31 +69,21 @@ try:
         timeout=20
     )
     if response.status_code == 200:
-        # Expecting a JSON array
         df = pd.DataFrame(response.json())
 
         # Sidebar Filters — unchanged
         st.sidebar.header("FILTERS")
-        # Avoid errors if SOURCE_SHEET missing — but keep your behavior
-        if "SOURCE_SHEET" not in df.columns:
-            st.error("Data does not include 'SOURCE_SHEET'. Please check the API data.")
-            st.stop()
-
-        sheet_filter = st.sidebar.selectbox("DEPARTMENT", options=df["SOURCE_SHEET"].dropna().unique().tolist())
+        sheet_filter = st.sidebar.selectbox("DEPARTMENT", options=df["SOURCE_SHEET"].unique().tolist())
         client_filter = st.sidebar.text_input("CLIENT NAME")
 
-        # ✅ Change Status Filter — unchanged UI
+        # ✅ Change Status Filter — unchanged
         st.sidebar.subheader("CHANGE STATUS")
         client_code_input = st.sidebar.text_input("Enter Client Code to Edit")
 
         # Filter by sheet — unchanged
         filtered_df = df[df["SOURCE_SHEET"] == sheet_filter].copy()
         if client_filter:
-            if "CLIENT NAME" in filtered_df.columns:
-                filtered_df = filtered_df[filtered_df["CLIENT NAME"].astype(str).str.contains(client_filter, case=False, na=False)]
-            else:
-                st.warning("Column 'CLIENT NAME' not found in this sheet.")
-                filtered_df = filtered_df  # no change
+            filtered_df = filtered_df[filtered_df["CLIENT NAME"].str.contains(client_filter, case=False, na=False)]
 
         # ✅ Columns based on sheet — unchanged
         if sheet_filter == "SS":
@@ -112,16 +102,16 @@ try:
             columns_to_show = filtered_df.columns.tolist()
 
         available_cols = [col for col in columns_to_show if col in filtered_df.columns]
-        display_df = filtered_df[available_cols] if available_cols else filtered_df
+        display_df = filtered_df[available_cols]
 
-        # ✅ If client code entered, filter case-insensitive — unchanged UI, slightly more robust
-        if client_code_input and "CLIENT CODE" in display_df.columns:
+        # ✅ If client code entered, filter case-insensitive — unchanged UI (more robust)
+        if client_code_input:
             display_df = display_df[
                 display_df["CLIENT CODE"].astype(str).str.strip().str.lower() ==
                 (client_code_input or "").strip().lower()
             ]
 
-        # ✅ Format premium columns safely — unchanged visual behavior
+        # ✅ Format premium columns safely — unchanged visuals
         for col in display_df.columns:
             if "PREMIUM" in col.upper():
                 display_df[col] = display_df[col].apply(
@@ -147,12 +137,12 @@ try:
                 final_value = new_value_option
 
                 if st.button("Apply Change"):
-                    # 🔒 Minimal but crucial: normalize keys sent to API
+                    # 🔒 Normalize keys sent to API so backend can match reliably
                     payload = {
-                        "sheet": canonicalize(sheet_filter),                          # normalize sheet name
-                        "client_code": (client_code_input or "").strip().upper(),    # normalize client code
-                        "column": canonicalize(selected_col),                         # normalize column name
-                        "new_value": final_value                                      # keep exact value
+                        "sheet": canonicalize(sheet_filter),
+                        "client_code": (client_code_input or "").strip().upper(),
+                        "column": canonicalize(selected_col),
+                        "new_value": final_value
                     }
                     try:
                         update_response = requests.post(
@@ -166,21 +156,18 @@ try:
 
                             # 🔄 Force a fresh GET to avoid stale cache after update
                             try:
-                                refreshed = requests.get(
+                                _ = requests.get(
                                     API_URL,
                                     params={'_ts': int(time.time())},
                                     headers={'Cache-Control': 'no-cache', 'Pragma': 'no-cache'},
                                     timeout=20
                                 )
-                                if refreshed.status_code != 200:
-                                    st.warning("Updated, but could not refresh data from API.")
                             except Exception as e:
                                 st.warning(f"Updated, but refresh failed: {e}")
 
-                            # Rerun to show new data
                             st.rerun()
                         else:
-                            # Display server-provided message when available
+                            # Show server message if provided
                             try:
                                 st.error(update_response.json().get("message", f"Update failed ({update_response.status_code})."))
                             except Exception:
@@ -192,3 +179,4 @@ try:
         st.error("Failed to fetch data from API")
 except Exception as e:
     st.error(f"Error connecting to API: {e}")
+
