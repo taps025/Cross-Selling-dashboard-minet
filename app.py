@@ -1,10 +1,11 @@
+
 import streamlit as st
 import requests
 import pandas as pd
 
-# ✅ Use deployed API URLs
-API_URL = "https://cross-selling-dashboard-minet-4.onrender.com/data"
-UPDATE_URL = "https://cross-selling-dashboard-minet-4.onrender.com/update"
+# ✅ Use new deployed API URLs
+API_URL = "https://api-6z3n.onrender.com/data"
+UPDATE_URL = "https://api-6z3n.onrender.com/update"
 
 # ✅ Custom CSS (Fix title and logo spacing)
 st.markdown("""
@@ -137,4 +138,3 @@ try:
         st.error("Failed to fetch data from API")
 except Exception as e:
     st.error(f"Error connecting to API: {e}")
-
