@@ -1,0 +1,21 @@
+
+name: Keep Render Services Awake
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # every 10 minutes UTC
+  workflow_dispatch:          # allows manual trigger from Actions tab
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping API
+        run: |
+          echo "Pinging API: https://api-6z3n.onrender.com/health"
+          curl -s -I https://api-6z3n.onrender.com/health || echo "API ping failed"
+
+      - name: Ping Streamlit App
+        run: |
+          echo "Pinging Streamlit App: https://cross-selling-dashboard.onrender.com/"
+          curl -s -I https://cross-selling-dashboard.onrender.com/ || echo "App ping failed"
