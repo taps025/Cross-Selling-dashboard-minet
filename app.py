@@ -137,3 +137,4 @@ try:
         st.error("Failed to fetch data from API")
 except Exception as e:
     st.error(f"Error connecting to API: {e}")
+
