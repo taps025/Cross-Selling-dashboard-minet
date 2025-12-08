@@ -4,18 +4,68 @@ name: Keep Render Services Awake
 on:
   schedule:
     - cron: "*/10 * * * *"   # every 10 minutes UTC
-  workflow_dispatch:          # allows manual trigger from Actions tab
+  workflow_dispatch:          # allow manual run from Actions tab
 
 jobs:
   ping:
     runs-on: ubuntu-latest
-    steps:
-      - name: Ping API
-        run: |
-          echo "Pinging API: https://api-6z3n.onrender.com/health"
-          curl -s -I https://api-6z3n.onrender.com/health || echo "API ping failed"
+    timeout-minutes: 5
 
-      - name: Ping Streamlit App
+    env:
+      API_URL: https://api-6z3n.onrender.com/health
+      APP_URL: https://cross-selling-dashboard.onrender.com/
+      # Optional API key if your /health requires it:
+      # API_KEY: ${{ secrets.RENDER_API_KEY }}
+
+    steps:
+      - name: Ping API (GET with retries)
         run: |
-          echo "Pinging Streamlit App: https://cross-selling-dashboard.onrender.com/"
-          curl -s -I https://cross-selling-dashboard.onrender.com/ || echo "App ping failed"
+          echo "Pinging API: $API_URL"
+          for i in 1 2 3; do
+            if curl -sS -L --fail --max-time 15 \
+                 -H "User-Agent: github-actions/keepalive" \
+                 "$API_URL" > /dev/null; then
+              echo "✅ API responded (attempt $i)"
+              exit 0
+            else
+              echo "⚠️ Attempt $i failed; retrying in 10s..."
+              sleep 10
+            fi
+          done
+          echo "❌ API did not respond after 3 attempts."
+          exit 1
+        # If you require an API key header, use:
+        # run: |
+        #   echo "Pinging API: $API_URL"
+        #   for i in 1 2 3; do
+        #     if curl -sS -L --fail --max-time 15 \
+        #          -H "User-Agent: github-actions/keepalive" \
+        #          -H "X-API-Key: $API_KEY" \
+        #          "$API_URL" > /dev/null; then
+        #       echo "✅ API responded (attempt $i)"
+        #       exit 0
+        #     else
+        #       echo "⚠️ Attempt $i failed; retrying in 10s..."
+        #       sleep 10
+        #     fi
+        #   done
+        #   echo "❌ API did not respond after 3 attempts."
+        #   exit 1
+
+      - name: Ping Streamlit App (GET with retries)
+        run: |
+          echo "Pinging App: $APP_URL"
+          for i in 1 2 3; do
+            if curl -sS -L --fail --max-time 15 \
+                 -H "User-Agent: github-actions/keepalive" \
+                 "$APP_URL" > /dev/null; then
+              echo "✅ App responded (attempt $i)"
+              exit 0
+            else
+              echo "⚠️ Attempt $i failed; retrying in 10s..."
+              sleep 10
+            fi
+          done
+          echo "❌ App did not respond after 3 attempts."
+          exit 1
+
