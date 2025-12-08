@@ -1,10 +1,22 @@
+
 import streamlit as st
 import requests
 import pandas as pd
+import re
+import time
 
 # ✅ Use new deployed API URLs
 API_URL = "https://api-6z3n.onrender.com/data"
 UPDATE_URL = "https://api-6z3n.onrender.com/update"
+
+# ✅ Helper: canonicalize names sent to API (no UI change)
+def canonicalize(name: str) -> str:
+    """Remove punctuation and normalize case for API keys (must match API behavior)."""
+    if not isinstance(name, str):
+        return ""
+    base = re.sub(r"[`\.,:\-]+", "", name)      # strip commas/periods/colons/backticks/dashes
+    base = re.sub(r"\s+", " ", base).strip()    # collapse spaces
+    return base.upper()
 
 # ✅ Custom CSS (Fix title and logo spacing)
 st.markdown("""
@@ -48,9 +60,14 @@ with col1:
 with col2:
     st.markdown("<h1 style='color:#2C3E50;'>OFFICE OF THE CUSTOMER DASHBOARD</h1>", unsafe_allow_html=True)
 
-# ✅ Fetch data from API
+# ✅ Fetch data from API (add cache-busting to avoid stale data)
 try:
-    response = requests.get(API_URL)
+    response = requests.get(
+        API_URL,
+        params={'_ts': int(time.time())},  # cache buster
+        headers={'Cache-Control': 'no-cache', 'Pragma': 'no-cache'},
+        timeout=20
+    )
     if response.status_code == 200:
         df = pd.DataFrame(response.json())
 
@@ -68,7 +85,7 @@ try:
         if client_filter:
             filtered_df = filtered_df[filtered_df["CLIENT NAME"].str.contains(client_filter, case=False, na=False)]
 
-        # ✅ Columns based on sheet
+        # ✅ Columns based on sheet (unchanged)
         if sheet_filter == "SS":
             columns_to_show = ["CLIENT CODE", "CLIENT NAME", "PREMIUM,", "CORPORATE.", "PERSONAL LINES.", "AFFINITY.", "EMPLOYEE BENEFITS."]
         elif sheet_filter == "corp":
@@ -87,11 +104,14 @@ try:
         available_cols = [col for col in columns_to_show if col in filtered_df.columns]
         display_df = filtered_df[available_cols]
 
-        # ✅ If client code entered, filter case-insensitive
+        # ✅ If client code entered, filter case-insensitive (unchanged UI, more robust)
         if client_code_input:
-            display_df = display_df[display_df["CLIENT CODE"].str.lower() == client_code_input.lower()]
+            display_df = display_df[
+                display_df["CLIENT CODE"].astype(str).str.strip().str.lower() ==
+                (client_code_input or "").strip().lower()
+            ]
 
-        # ✅ Format premium columns safely
+        # ✅ Format premium columns safely (unchanged visuals)
         for col in display_df.columns:
             if "PREMIUM" in col.upper():
                 display_df[col] = display_df[col].apply(
@@ -117,19 +137,41 @@ try:
                 final_value = new_value_option
 
                 if st.button("Apply Change"):
+                    # 🔒 Normalize keys sent to API so backend matches Excel headers robustly
                     payload = {
-                        "sheet": sheet_filter,
-                        "client_code": client_code_input,
-                        "column": selected_col,
+                        "sheet": canonicalize(sheet_filter),                          # normalize sheet name
+                        "client_code": (client_code_input or "").strip(),            # keep exact code, matching API's case-insensitive check
+                        "column": canonicalize(selected_col),                         # normalize column name to match API header canonicalization
                         "new_value": final_value
                     }
                     try:
-                        update_response = requests.post(UPDATE_URL, json=payload)
+                        update_response = requests.post(
+                            UPDATE_URL,
+                            json=payload,
+                            headers={'Cache-Control': 'no-cache', 'Pragma': 'no-cache'},
+                            timeout=20
+                        )
                         if update_response.status_code == 200:
-                            st.success(update_response.json().get("message"))
+                            st.success(update_response.json().get("message", "Updated successfully."))
+
+                            # 🔄 Force a fresh GET to avoid stale cache after update
+                            try:
+                                _ = requests.get(
+                                    API_URL,
+                                    params={'_ts': int(time.time())},
+                                    headers={'Cache-Control': 'no-cache', 'Pragma': 'no-cache'},
+                                    timeout=20
+                                )
+                            except Exception as e:
+                                st.warning(f"Updated, but refresh failed: {e}")
+
                             st.rerun()
                         else:
-                            st.error(update_response.json().get("message"))
+                            # Show server message if provided
+                            try:
+                                st.error(update_response.json().get("message", f"Update failed ({update_response.status_code})."))
+                            except Exception:
+                                st.error(f"Update failed with status {update_response.status_code}.")
                     except Exception as e:
                         st.error(f"Error updating via API: {e}")
 
@@ -137,4 +179,3 @@ try:
         st.error("Failed to fetch data from API")
 except Exception as e:
     st.error(f"Error connecting to API: {e}")
-
