@@ -1,144 +1,122 @@
 
-from flask import Flask, jsonify, request
+import streamlit as st
+import requests
 import pandas as pd
-from openpyxl import load_workbook
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
-import threading
-from datetime import datetime
 import time
-import traceback
-import os
+import re
 
-app = Flask(__name__)
+API_URL = "https://api-6z3n.onrender.com/data"
+UPDATE_URL = "https://api-6z3n.onrender.com/update"
 
-# ✅ Use persistent path from environment (Render Disk), fallback for local dev
-excel_file = os.getenv("EXCEL_PATH", "Data.xlsx")
+def canonicalize(name: str) -> str:
+    if not isinstance(name, str):
+        return name
+    base = re.sub(r"[`\.,:-]+", "", name)            # strip punctuation
+    base = re.sub(r"\s+", " ", base).strip()          # normalize spaces
+    return base.upper()                               # unify case
 
-# Keep your sheet list exactly as is
-sheet_names = ['corp', 'EB', 'SS', 'PLD', 'AFFINITY', 'MINING']
-final_df = None
+# ===== Fetch data (NO CACHE) =====
+def fetch_data():
+    return requests.get(
+        API_URL,
+        params={'_ts': int(time.time())},
+        headers={'Cache-Control': 'no-cache', 'Pragma': 'no-cache'}
+    )
 
-# ✅ Load all sheets into one DataFrame
-def load_excel():
-    global final_df
-    try:
-        combined_data = []
-        for sheet in sheet_names:
-            df = pd.read_excel(excel_file, sheet_name=sheet, engine='openpyxl')
-            df['SOURCE_SHEET'] = sheet
-            combined_data.append(df)
-        final_df = pd.concat(combined_data, ignore_index=True)
-        print("Excel file reloaded!")
-    except Exception as e:
-        # Do not crash; keep final_df as-is so /data can respond gracefully
-        print("Error loading Excel:", e)
+try:
+    response = fetch_data()
+    if response.status_code == 200:
+        df = pd.DataFrame(response.json())
 
-# Initial load
-load_excel()
+        # Sidebar
+        st.sidebar.header("FILTERS")
+        sheet_filter = st.sidebar.selectbox("DEPARTMENT", options=sorted(df["SOURCE_SHEET"].dropna().unique().tolist()))
+        client_filter = st.sidebar.text_input("CLIENT NAME")
 
-# ✅ Watchdog handler for auto-reload (kept as in your original code)
-class ReloadHandler(FileSystemEventHandler):
-    def on_modified(self, event):
-        # Some environments emit full path, some base name; handle both
-        if event.src_path.endswith(os.path.basename(excel_file)) or event.src_path.endswith(excel_file):
-            time.sleep(1)  # Avoid race condition
-            load_excel()
+        st.sidebar.subheader("CHANGE STATUS")
+        client_code_input = st.sidebar.text_input("Enter Client Code to Edit")
 
-def start_watcher():
-    event_handler = ReloadHandler()
-    # Watch the directory containing the excel_file
-    watch_dir = os.path.dirname(excel_file) or '.'
-    observer = Observer()
-    observer.schedule(event_handler, watch_dir, recursive=False)
-    observer.start()
+        filtered_df = df[df["SOURCE_SHEET"] == sheet_filter].copy()
+        if client_filter:
+            filtered_df = filtered_df[filtered_df["CLIENT NAME"].str.contains(client_filter, case=False, na=False)]
 
-# ✅ Root route to avoid 404
-@app.route('/')
-def home():
-    return "✅ API is running! Use /data to get data or /update to update Excel."
+        # Choose columns based on sheet (unchanged)
+        if sheet_filter == "SS":
+            columns_to_show = ["CLIENT CODE", "CLIENT NAME", "PREMIUM,", "CORPORATE.", "PERSONAL LINES.", "AFFINITY.", "EMPLOYEE BENEFITS."]
+        elif sheet_filter == "corp":
+            columns_to_show = ["CLIENT CODE", "CLIENT NAME", "PREMIUM.", "EMPLOYEE BENEFITS", "PERSONAL LINES", "STAFF SCHEMES"]
+        elif sheet_filter == "EB":
+            columns_to_show = ["CLIENT CODE", "CLIENT NAME", "PREMIUM", "CORPORATE-", "AFFINITY-", "STAFF SCHEMES-", "PERSONAL LINES-"]
+        elif sheet_filter == "PLD":
+            columns_to_show = ["CLIENT CODE", "CLIENT NAME", "PREMIUM;", "CORPORATE:", "STAFF SCHEMES:", "EMPLOYEE BENEFITS:", "AFFINITY:", "MINING:"]
+        elif sheet_filter == "AFFINITY":
+            columns_to_show = ["CLIENT CODE", "CLIENT NAME", "PREMIUM:", "EMPLOYEE BENEFITS,", "STAFF SCHEMES,", "PERSONAL LINES,"]
+        elif sheet_filter == "MINING":
+            columns_to_show = ["CLIENT CODE", "CLIENT NAME", "PREMIUM`", "EMPLOYEE BENEFITS`", "AFFINITY`", "STAFF SCHEMES`", "PERSONAL LINES`"]
+        else:
+            columns_to_show = filtered_df.columns.tolist()
 
-@app.route('/data', methods=['GET'])
-def get_all_data():
-    # Guard against None on startup failures
-    if final_df is None:
-        return jsonify({"status": "error", "message": "No data loaded"}), 503
-    # Replace NaN with None for clean JSON
-    safe_df = final_df.where(pd.notnull(final_df), None)
-    return jsonify(safe_df.to_dict(orient='records'))
+        available_cols = [col for col in columns_to_show if col in filtered_df.columns]
+        display_df = filtered_df[available_cols]
 
-# ✅ Update endpoint with timestamp tracking and lock handling
-@app.route('/update', methods=['POST'])
-def update_excel():
-    try:
-        data = request.json or {}
-        sheet = data.get("sheet")
-        client_code = data.get("client_code")
-        column = data.get("column")
-        new_value = data.get("new_value")
+        if client_code_input:
+            code_key = client_code_input.strip().lower()
+            display_df = display_df[display_df["CLIENT CODE"].astype(str).str.strip().str.lower() == code_key]
 
-        if not all([sheet, client_code, column]):
-            return jsonify({"status": "error", "message": "Missing one of: sheet, client_code, column"}), 400
+        # Format premiums (display only)
+        for col in display_df.columns:
+            if "PREMIUM" in col.upper():
+                display_df[col] = display_df[col].apply(
+                    lambda x: f"{float(x):,.2f}" if pd.notnull(x) and str(x).replace('.', '', 1).isdigit() else str(x)
+                )
 
-        wb = load_workbook(excel_file)
-        if sheet not in wb.sheetnames:
-            return jsonify({"status": "error", "message": f"Sheet '{sheet}' not found"}), 404
-        ws = wb[sheet]
+        def highlight_cross_sell(val):
+            return "color: red; font-weight: bold;" if str(val).strip().lower() == "cross-sell" else ""
 
-        # Find row by CLIENT CODE (assumes column A holds client code, as in your original)
-        for row in ws.iter_rows(min_row=2):
-            # Compare case-insensitively and safely
-            cell_val = row[0].value
-            if str(cell_val).lower() == str(client_code).lower():
-                # Find column index for the target column (exact match, as in your original)
-                col_idx = None
-                for i, cell in enumerate(ws[1]):
-                    if str(cell.value).strip() == column:
-                        col_idx = i
-                        break
+        styled_df = display_df.style.applymap(highlight_cross_sell).hide(axis="index")
+        st.markdown(f'<div class="scroll-container">{styled_df.to_html()}</div>', unsafe_allow_html=True)
 
-                # Find column index for timestamp (case-insensitive)
-                timestamp_col_idx = None
-                for i, cell in enumerate(ws[1]):
-                    if str(cell.value).strip().lower() == "status_updated_at":
-                        timestamp_col_idx = i
-                        break
+        # Edit section
+        if client_code_input:
+            if display_df.empty:
+                st.warning("No client found with that code.")
+            else:
+                st.markdown("### Edit Client Details")
+                editable_cols = [col for col in display_df.columns if col not in ["CLIENT CODE", "CLIENT NAME"]]
+                selected_col_display = st.selectbox("Select Column to Edit", options=editable_cols)
+                new_value_option = st.selectbox("Select New Value", options=["Cross-Sell", "Shared Client"])
+                final_value = new_value_option
 
-                if col_idx is not None:
-                    # Update status
-                    row[col_idx].value = new_value
-
-                    # Update timestamp
-                    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    if timestamp_col_idx is not None:
-                        row[timestamp_col_idx].value = current_time
-                    else:
-                        # ✅ Fix: explicitly compute the new column index so we don't rely on ws.max_column changing mid-write
-                        new_col = ws.max_column + 1  # openpyxl is 1-based for ws.cell
-                        ws.cell(row=1, column=new_col, value="STATUS_UPDATED_AT")
-                        # row[...] indexing is zero-based; convert new_col to zero-based index for row[]
-                        row[new_col - 1].value = current_time
-
-                    # ✅ Handle Excel lock and ensure persistence path is used
+                if st.button("Apply Change"):
+                    payload = {
+                        "sheet": canonicalize(sheet_filter),                    # normalize sheet name
+                        "client_code": client_code_input.strip().upper(),       # normalize client code
+                        "column": canonicalize(selected_col_display),           # normalize column
+                        "new_value": final_value
+                    }
                     try:
-                        wb.save(excel_file)
-                    except PermissionError:
-                        return jsonify({"status": "error", "message": "Excel file is open. Please close it and try again."}), 500
-
-                    time.sleep(1)  # Avoid race condition with Watchdog
-                    load_excel()
-                    return jsonify({
-                        "status": "success",
-                        "message": f"Updated {column} for {client_code} to {new_value} at {current_time}"
-                    })
-                else:
-                    return jsonify({"status": "error", "message": "Column not found"}), 400
-        return jsonify({"status": "error", "message": "Client Code not found"}), 404
-    except Exception as e:
-        print("Error:", traceback.format_exc())
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-if __name__ == '__main__':
-    threading.Thread(target=start_watcher, daemon=True).start()
-    # Use $PORT in production (Render will set it). For local dev, 5000 is fine.
-    port = int(os.getenv("PORT", "5000"))
+                        update_response = requests.post(
+                            UPDATE_URL, json=payload,
+                            headers={'Cache-Control': 'no-cache', 'Pragma': 'no-cache'}
+                        )
+                        if update_response.status_code == 200:
+                            st.success(update_response.json().get("message", "Updated."))
+                            # Force-refetch to verify persistence
+                            refreshed = fetch_data()
+                            if refreshed.status_code == 200:
+                                df = pd.DataFrame(refreshed.json())
+                            else:
+                                st.warning("Updated, but could not refresh data.")
+                            st.rerun()
+                        else:
+                            # Show server message if any
+                            try:
+                                st.error(update_response.json().get("message", "Update failed."))
+                            except:
+                                st.error(f"Update failed with status {update_response.status_code}.")
+                    except Exception as e:
+                        st.error(f"Error updating via API: {e}")
+    else:
+        st.error("Failed to fetch data from API")
+except Exception as e:
+    st.error(f"Error connecting to API: {e}")
