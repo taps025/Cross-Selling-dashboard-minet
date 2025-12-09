@@ -1,8 +1,10 @@
+
 import streamlit as st
 import requests
 import pandas as pd
 import re
 import time
+import io  # NEW: for in-memory Excel export
 
 # -----------------------------
 # CONFIG
@@ -21,6 +23,33 @@ def canonicalize(name: str) -> str:
     base = re.sub(r"[`\.,:\-]+", "", name)
     base = re.sub(r"\s+", " ", base).strip()
     return base.upper()
+
+
+def df_to_excel_bytes(df: pd.DataFrame, sheet_name: str = "Data") -> bytes:
+    """
+    Convert a DataFrame to an Excel file in-memory and return bytes.
+    - Exports exactly what is in the DataFrame (e.g., after filters & formatting).
+    - Applies a simple column auto-fit for readability.
+    """
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name=sheet_name)
+
+        # Auto-fit column widths based on content length
+        ws = writer.book[sheet_name]
+        for column_cells in ws.iter_cols(min_row=1, max_row=ws.max_row, max_col=ws.max_column):
+            max_len = 0
+            for cell in column_cells:
+                try:
+                    val_len = len(str(cell.value)) if cell.value is not None else 0
+                except Exception:
+                    val_len = 0
+                if val_len > max_len:
+                    max_len = val_len
+            ws.column_dimensions[column_cells[0].column_letter].width = max_len + 2
+
+    output.seek(0)
+    return output.getvalue()
 
 
 # -----------------------------
@@ -123,7 +152,7 @@ column_map = {
 
 columns_to_show = column_map.get(sheet_filter, filtered_df.columns.tolist())
 available_cols = [c for c in columns_to_show if c in filtered_df.columns]
-display_df = filtered_df[available_cols]
+display_df = filtered_df[available_cols].copy()
 
 
 # -----------------------------
@@ -133,16 +162,21 @@ if client_code_input:
     display_df = display_df[
         display_df["CLIENT CODE"].astype(str).str.strip().str.lower() ==
         client_code_input.strip().lower()
-    ]
+    ].copy()
 
 
 # -----------------------------
 # FORMAT PREMIUM COLUMNS
 # -----------------------------
+# Keep your formatted strings for display/export
 for col in display_df.columns:
     if "PREMIUM" in col.upper():
-        display_df[col] = display_df[col].apply(
-            lambda x: f"{float(x):,.2f}" if pd.notnull(x) and str(x).replace('.', '', 1).isdigit() else x
+        display_df.loc[:, col] = display_df[col].apply(
+            lambda x: (
+                f"{float(x):,.2f}"
+                if pd.notnull(x) and str(x).replace('.', '', 1).isdigit()
+                else x
+            )
         )
 
 
@@ -158,6 +192,25 @@ def highlight_cross_sell(val):
 # -----------------------------
 styled_df = display_df.style.applymap(highlight_cross_sell).hide(axis="index")
 st.markdown(f'<div class="scroll-container">{styled_df.to_html()}</div>', unsafe_allow_html=True)
+
+
+# -----------------------------
+# EXPORT TO EXCEL (of the displayed table)
+# -----------------------------
+if not display_df.empty:
+    excel_bytes = df_to_excel_bytes(display_df, sheet_name=sheet_filter or "Data")
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    filename = f"office_of_customer_{sheet_filter}_{ts}.xlsx"
+
+    st.download_button(
+        label="📥 Export displayed table to Excel",
+        data=excel_bytes,
+        file_name=filename,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        help="Downloads the currently displayed table (after filters) as an Excel file."
+    )
+else:
+    st.info("No rows to export for the current filters.")
 
 
 # -----------------------------
@@ -202,5 +255,3 @@ if client_code_input:
 
             except Exception as e:
                 st.error(f"Error updating API: {e}")
-
-
