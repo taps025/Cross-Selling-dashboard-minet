@@ -6,8 +6,8 @@ import re
 import time
 
 # ✅ Use new deployed API URLs
-API_URL = "https://api-6z3n.onrender.com/data"
-UPDATE_URL = "https://api-6z3n.onrender.com/update"
+API_URL = "https://api-minet.onrender.com/data"
+UPDATE_URL = "https://api-minet.onrender.com/update"
 
 # ✅ Helper: canonicalize names sent to API (no UI change)
 def canonicalize(name: str) -> str:
@@ -179,3 +179,4 @@ try:
         st.error("Failed to fetch data from API")
 except Exception as e:
     st.error(f"Error connecting to API: {e}")
+
