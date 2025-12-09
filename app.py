@@ -207,7 +207,7 @@ if not display_df.empty:
         data=excel_bytes,
         file_name=filename,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        help="Downloads the currently displayed table (after filters) as an Excel file."
+        help="Download  displayed table as an Excel file."
     )
 else:
     st.info("No rows to export for the current filters.")
@@ -255,4 +255,5 @@ if client_code_input:
 
             except Exception as e:
                 st.error(f"Error updating API: {e}")
+
 
