@@ -4,7 +4,7 @@ import requests
 import pandas as pd
 import re
 import time
-import io  # NEW: for in-memory Excel export
+import io  # for in-memory Excel export
 
 # -----------------------------
 # CONFIG
@@ -28,7 +28,7 @@ def canonicalize(name: str) -> str:
 def df_to_excel_bytes(df: pd.DataFrame, sheet_name: str = "Data") -> bytes:
     """
     Convert a DataFrame to an Excel file in-memory and return bytes.
-    - Exports exactly what is in the DataFrame (e.g., after filters & formatting).
+    - Exports exactly what is in the DataFrame (after filters & formatting).
     - Applies a simple column auto-fit for readability.
     """
     output = io.BytesIO()
@@ -53,10 +53,11 @@ def df_to_excel_bytes(df: pd.DataFrame, sheet_name: str = "Data") -> bytes:
 
 
 # -----------------------------
-# CUSTOM CSS
+# CUSTOM CSS (Light/Dark-safe headers)
 # -----------------------------
 st.markdown("""
 <style>
+    /* Layout */
     .block-container {
         padding-top: 2.9rem !important;
         padding-left: 1rem;
@@ -72,12 +73,66 @@ st.markdown("""
         overflow-y: auto;
         border: 1px solid #ddd;
         padding: 5px;
+        border-radius: 6px;
+        background: transparent;
     }
-    thead th {
+
+    /* Default (light mode) header style */
+    .scroll-container table thead th {
         position: sticky;
         top: 0;
-        background-color: #f8f9fa;
         z-index: 2;
+        background-color: #f8f9fa;          /* light gray */
+        color: #1f2937;                      /* dark text */
+        border-bottom: 1px solid #e5e7eb;
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
+        font-weight: 700;
+        white-space: normal;                 /* allow wrapping on narrow screens */
+    }
+
+    /* Ensure table cell text is readable on both modes */
+    .scroll-container table tbody td {
+        color: inherit;
+    }
+
+    /* Dark-mode via OS/browser preference */
+    @media (prefers-color-scheme: dark) {
+        .scroll-container {
+            border-color: #374151;
+        }
+        .scroll-container table thead th {
+            background-color: #1f2937;      /* dark slate */
+            color: #f3f4f6;                 /* very light text */
+            border-bottom: 1px solid #374151;
+        }
+        /* Improve scrollbar contrast in dark mode */
+        .scroll-container::-webkit-scrollbar {
+            width: 10px;
+            height: 10px;
+        }
+        .scroll-container::-webkit-scrollbar-thumb {
+            background-color: #4b5563;
+            border-radius: 6px;
+        }
+        .scroll-container::-webkit-scrollbar-track {
+            background-color: #1f2937;
+        }
+    }
+
+    /* Dark-mode via Streamlit theme flag */
+    .stApp[data-theme="dark"] .scroll-container table thead th {
+        background-color: #1f2937 !important;
+        color: #f3f4f6 !important;
+        border-bottom: 1px solid #374151 !important;
+    }
+
+    /* Optional: sticky first column for better readability on narrow screens */
+    .scroll-container table tbody td:first-child,
+    .scroll-container table thead th:first-child {
+        position: sticky;
+        left: 0;
+        background-clip: padding-box; /* avoid overlap bleeding */
     }
 </style>
 """, unsafe_allow_html=True)
@@ -126,6 +181,19 @@ client_filter = st.sidebar.text_input("CLIENT NAME")
 
 client_code_input = st.sidebar.text_input("Enter Client Code to Edit")
 
+# Optional: high contrast headers toggle for tricky displays (TVs etc.)
+high_contrast = st.sidebar.toggle("High contrast headers", value=False)
+if high_contrast:
+    st.markdown("""
+    <style>
+      .scroll-container table thead th {
+          background-color: #0f172a !important;  /* even darker */
+          color: #ffffff !important;              /* white text */
+          border-bottom: 1px solid #1e293b !important;
+      }
+    </style>
+    """, unsafe_allow_html=True)
+
 
 # -----------------------------
 # FILTER DATA
@@ -168,7 +236,6 @@ if client_code_input:
 # -----------------------------
 # FORMAT PREMIUM COLUMNS
 # -----------------------------
-# Keep your formatted strings for display/export
 for col in display_df.columns:
     if "PREMIUM" in col.upper():
         display_df.loc[:, col] = display_df[col].apply(
@@ -203,11 +270,11 @@ if not display_df.empty:
     filename = f"office_of_customer_{sheet_filter}_{ts}.xlsx"
 
     st.download_button(
-        label="📥 Export to Excel",
+        label="📥 Export displayed table to Excel",
         data=excel_bytes,
         file_name=filename,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        help="Download  displayed table as an Excel file."
+        help="Downloads the currently displayed table (after filters) as an Excel file."
     )
 else:
     st.info("No rows to export for the current filters.")
@@ -255,5 +322,7 @@ if client_code_input:
 
             except Exception as e:
                 st.error(f"Error updating API: {e}")
+
+
 
 
