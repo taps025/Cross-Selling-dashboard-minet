@@ -7,6 +7,11 @@ import time
 import io  # for in-memory Excel export
 
 # -----------------------------
+# PAGE CONFIG (enable wide layout for better responsiveness)
+# -----------------------------
+st.set_page_config(page_title="Office of the Customer Dashboard", layout="wide")
+
+# -----------------------------
 # CONFIG
 # -----------------------------
 API_URL = "https://api-minet.onrender.com/data"
@@ -53,32 +58,53 @@ def df_to_excel_bytes(df: pd.DataFrame, sheet_name: str = "Data") -> bytes:
 
 
 # -----------------------------
-# CUSTOM CSS (Light/Dark-safe headers)
+# SIDEBAR CONTROLS (add compact mode & high contrast headers)
 # -----------------------------
-st.markdown("""
+st.sidebar.header("FILTERS")
+
+compact_mode = st.sidebar.toggle("Compact mode (better fit on phones/TVs)", value=True)
+high_contrast = st.sidebar.toggle("High contrast headers", value=False)
+
+# -----------------------------
+# CUSTOM CSS (Light/Dark-safe + Responsive)
+# -----------------------------
+st.markdown(f"""
 <style>
-    /* Layout */
-    .block-container {
-        padding-top: 2.9rem !important;
-        padding-left: 1rem;
-        padding-right: 1rem;
+    /* Base container: reduce global paddings for small screens */
+    .block-container {{
+        padding-top: 2.0rem !important;
+        padding-left: 0.75rem;
+        padding-right: 0.75rem;
         max-width: 100%;
-    }
-    h1 {
+    }}
+
+    h1 {{
         margin-top: 0;
         text-align: center;
-    }
-    .scroll-container {
-        max-height: 500px;
-        overflow-y: auto;
-        border: 1px solid #ddd;
-        padding: 5px;
-        border-radius: 6px;
-        background: transparent;
-    }
+        line-height: 1.2;
+    }}
 
-    /* Default (light mode) header style */
-    .scroll-container table thead th {
+    /* Scroll area for table */
+    .scroll-container {{
+        max-height: 60vh;        /* use viewport height for better fit */
+        overflow-y: auto;
+        overflow-x: auto;        /* allow horizontal scroll on narrow screens */
+        border: 1px solid #ddd;
+        padding: { '6px' if compact_mode else '10px' };
+        border-radius: 8px;
+        background: transparent;
+    }}
+
+    /* Ensure table uses full width and is responsive */
+    .scroll-container table {{
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: auto;      /* allow natural wrapping */
+        font-size: { '0.88rem' if compact_mode else '0.95rem' };
+    }}
+
+    /* Header defaults (light mode) */
+    .scroll-container table thead th {{
         position: sticky;
         top: 0;
         z-index: 2;
@@ -89,53 +115,105 @@ st.markdown("""
         letter-spacing: 0.02em;
         font-weight: 700;
         white-space: normal;                 /* allow wrapping on narrow screens */
-    }
+        padding: { '8px 10px' if compact_mode else '10px 12px' };
+    }}
 
-    /* Ensure table cell text is readable on both modes */
-    .scroll-container table tbody td {
+    /* Body cells */
+    .scroll-container table tbody td {{
         color: inherit;
-    }
+        padding: { '8px 10px' if compact_mode else '10px 12px' };
+        vertical-align: top;
+        word-wrap: break-word;
+        white-space: normal;
+    }}
+
+    /* Improve row separation */
+    .scroll-container table tbody tr td {{
+        border-bottom: 1px solid #eee;
+    }}
 
     /* Dark-mode via OS/browser preference */
-    @media (prefers-color-scheme: dark) {
-        .scroll-container {
+    @media (prefers-color-scheme: dark) {{
+        .scroll-container {{
             border-color: #374151;
-        }
-        .scroll-container table thead th {
+        }}
+        .scroll-container table thead th {{
             background-color: #1f2937;      /* dark slate */
             color: #f3f4f6;                 /* very light text */
             border-bottom: 1px solid #374151;
-        }
+        }}
         /* Improve scrollbar contrast in dark mode */
-        .scroll-container::-webkit-scrollbar {
+        .scroll-container::-webkit-scrollbar {{
             width: 10px;
             height: 10px;
-        }
-        .scroll-container::-webkit-scrollbar-thumb {
+        }}
+        .scroll-container::-webkit-scrollbar-thumb {{
             background-color: #4b5563;
             border-radius: 6px;
-        }
-        .scroll-container::-webkit-scrollbar-track {
+        }}
+        .scroll-container::-webkit-scrollbar-track {{
             background-color: #1f2937;
-        }
-    }
+        }}
+    }}
 
     /* Dark-mode via Streamlit theme flag */
-    .stApp[data-theme="dark"] .scroll-container table thead th {
+    .stApp[data-theme="dark"] .scroll-container table thead th {{
         background-color: #1f2937 !important;
         color: #f3f4f6 !important;
         border-bottom: 1px solid #374151 !important;
-    }
+    }}
 
-    /* Optional: sticky first column for better readability on narrow screens */
-    .scroll-container table tbody td:first-child,
-    .scroll-container table thead th:first-child {
-        position: sticky;
-        left: 0;
-        background-clip: padding-box; /* avoid overlap bleeding */
-    }
+    /* Sticky first column for wide screens only (helps readability),
+       but disable for very small screens to avoid overlap */
+    @media (min-width: 600px) {{
+        .scroll-container table tbody td:first-child,
+        .scroll-container table thead th:first-child {{
+            position: sticky;
+            left: 0;
+            background-clip: padding-box;
+            background-color: inherit;
+        }}
+    }}
+
+    /* Typography scaling by breakpoints for better fit */
+    @media (max-width: 480px) {{
+        h1 {{
+            font-size: 1.1rem;
+        }}
+        .scroll-container {{
+            max-height: 65vh;
+        }}
+        .scroll-container table {{
+            font-size: { '0.82rem' if compact_mode else '0.9rem' };
+        }}
+        .scroll-container table thead th,
+        .scroll-container table tbody td {{
+            padding: { '6px 8px' if compact_mode else '8px 10px' };
+        }}
+    }}
+
+    @media (min-width: 481px) and (max-width: 768px) {{
+        h1 {{
+            font-size: 1.3rem;
+        }}
+        .scroll-container table {{
+            font-size: { '0.86rem' if compact_mode else '0.95rem' };
+        }}
+    }}
 </style>
 """, unsafe_allow_html=True)
+
+# Optional high contrast override for headers
+if high_contrast:
+    st.markdown("""
+    <style>
+      .scroll-container table thead th {
+          background-color: #0f172a !important;  /* even darker */
+          color: #ffffff !important;              /* white text */
+          border-bottom: 1px solid #1e293b !important;
+      }
+    </style>
+    """, unsafe_allow_html=True)
 
 
 # -----------------------------
@@ -143,8 +221,7 @@ st.markdown("""
 # -----------------------------
 col1, col2 = st.columns([2, 8])
 with col1:
-    st.image("minet.png", width=180)
-
+    st.image("minet.png", use_container_width=True)  # responsive image
 with col2:
     st.markdown("<h1>OFFICE OF THE CUSTOMER DASHBOARD</h1>", unsafe_allow_html=True)
 
@@ -174,25 +251,10 @@ except Exception as e:
 # -----------------------------
 # SIDEBAR FILTERS
 # -----------------------------
-st.sidebar.header("FILTERS")
-
 sheet_filter = st.sidebar.selectbox("DEPARTMENT", options=df["SOURCE_SHEET"].unique().tolist())
 client_filter = st.sidebar.text_input("CLIENT NAME")
 
 client_code_input = st.sidebar.text_input("Enter Client Code to Edit")
-
-# Optional: high contrast headers toggle for tricky displays (TVs etc.)
-high_contrast = st.sidebar.toggle("High contrast headers", value=False)
-if high_contrast:
-    st.markdown("""
-    <style>
-      .scroll-container table thead th {
-          background-color: #0f172a !important;  /* even darker */
-          color: #ffffff !important;              /* white text */
-          border-bottom: 1px solid #1e293b !important;
-      }
-    </style>
-    """, unsafe_allow_html=True)
 
 
 # -----------------------------
@@ -255,7 +317,7 @@ def highlight_cross_sell(val):
 
 
 # -----------------------------
-# DISPLAY TABLE
+# DISPLAY TABLE (HTML to retain styling)
 # -----------------------------
 styled_df = display_df.style.applymap(highlight_cross_sell).hide(axis="index")
 st.markdown(f'<div class="scroll-container">{styled_df.to_html()}</div>', unsafe_allow_html=True)
@@ -322,6 +384,8 @@ if client_code_input:
 
             except Exception as e:
                 st.error(f"Error updating API: {e}")
+
+
 
 
 
