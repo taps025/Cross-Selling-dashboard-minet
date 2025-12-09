@@ -203,7 +203,7 @@ if not display_df.empty:
     filename = f"office_of_customer_{sheet_filter}_{ts}.xlsx"
 
     st.download_button(
-        label="📥 Export displayed table to Excel",
+        label="📥 Export to Excel",
         data=excel_bytes,
         file_name=filename,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -255,3 +255,4 @@ if client_code_input:
 
             except Exception as e:
                 st.error(f"Error updating API: {e}")
+
