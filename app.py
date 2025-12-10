@@ -4,10 +4,12 @@ import requests
 import pandas as pd
 import re
 import time
-import io  # for in-memory Excel export
+import io
+import os
+import base64
 
 # -----------------------------
-# PAGE CONFIG (wide layout improves responsiveness)
+# PAGE CONFIG
 # -----------------------------
 st.set_page_config(page_title="Office of the Customer Dashboard", layout="wide")
 
@@ -17,7 +19,6 @@ st.set_page_config(page_title="Office of the Customer Dashboard", layout="wide")
 API_URL = "https://api-minet.onrender.com/data"
 UPDATE_URL = "https://api-minet.onrender.com/update"
 
-
 # -----------------------------
 # HELPERS
 # -----------------------------
@@ -25,22 +26,15 @@ def canonicalize(name: str) -> str:
     """Normalize names for matching in Excel/API."""
     if not isinstance(name, str):
         return ""
-    base = re.sub(r"[`\.,:\-]+", "", name)   # keep raw string; backtick is okay here
+    base = re.sub(r"[`\.,:\-]+", "", name)
     base = re.sub(r"\s+", " ", base).strip()
     return base.upper()
 
-
 def df_to_excel_bytes(df: pd.DataFrame, sheet_name: str = "Data") -> bytes:
-    """
-    Convert a DataFrame to an Excel file in-memory and return bytes.
-    - Exports exactly what is in the DataFrame (after filters & formatting).
-    - Applies a simple column auto-fit for readability.
-    """
+    """Convert a DataFrame to an Excel file in-memory and return bytes."""
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name=sheet_name)
-
-        # Auto-fit column widths based on content length
         ws = writer.book[sheet_name]
         for column_cells in ws.iter_cols(min_row=1, max_row=ws.max_row, max_col=ws.max_column):
             max_len = 0
@@ -49,13 +43,32 @@ def df_to_excel_bytes(df: pd.DataFrame, sheet_name: str = "Data") -> bytes:
                 if val_len > max_len:
                     max_len = val_len
             ws.column_dimensions[column_cells[0].column_letter].width = max_len + 2
-
     output.seek(0)
     return output.getvalue()
 
+def embed_image_base64(image_path: str) -> str:
+    """Return a data URI for an image, or empty string if not found."""
+    if not os.path.exists(image_path):
+        return ""
+    with open(image_path, "rb") as f:
+        data = f.read()
+    # Infer mime type
+    lower = image_path.lower()
+    if lower.endswith(".png"):
+        mime = "image/png"
+    elif lower.endswith(".jpg") or lower.endswith(".jpeg"):
+        mime = "image/jpeg"
+    elif lower.endswith(".svg"):
+        # Streamlit won't inline raw SVG here; prefer PNG/JPG.
+        # If you do use SVG, convert to PNG or serve via st.image.
+        mime = "image/svg+xml"
+    else:
+        mime = "image/png"
+    b64 = base64.b64encode(data).decode("utf-8")
+    return f"data:{mime};base64,{b64}"
 
 # -----------------------------
-# CSS & HEADER HTML (use triple-single quotes to avoid unterminated strings)
+# CSS & HEADER HTML
 # -----------------------------
 CSS = '''
 <style>
@@ -203,19 +216,34 @@ CSS = '''
 </style>
 '''
 
-HEADER_HTML = '''
+# Use Base64-embedded logo (bullet-proof across hosting)
+logo_path = "minet.png"   # <-- ensure this exists next to app.py (or change to assets/minet.png)
+logo_data_uri = embed_image_base64(logo_path)
+
+HEADER_HTML = f'''
 <div class="header-row">
   <div class="logo-wrap">
-    minet.png
+    {'<img src="' + logo_data_uri + '" alt="Minet logo">' if logo_data_uri else ''}
   </div>
   <h1 class="app-title">OFFICE OF THE CUSTOMER DASHBOARD</h1>
 </div>
 '''
 
-# Inject CSS and header (no unterminated strings)
+# Inject CSS and header
 st.markdown(CSS, unsafe_allow_html=True)
-st.markdown(HEADER_HTML, unsafe_allow_html=True)
-
+if logo_data_uri:
+    st.markdown(HEADER_HTML, unsafe_allow_html=True)
+else:
+    # Fallback showing a warning and attempt to render via st.image
+    st.warning("Logo file not found. Please ensure 'minet.png' is in the app directory.")
+    col_logo, col_title = st.columns([2, 8])
+    with col_logo:
+        try:
+            st.image(logo_path, use_container_width=True)
+        except Exception:
+            pass
+    with col_title:
+        st.markdown('<h1 class="app-title">OFFICE OF THE CUSTOMER DASHBOARD</h1>', unsafe_allow_html=True)
 
 # -----------------------------
 # LOAD DATA FROM API
@@ -236,7 +264,6 @@ except Exception as e:
     st.error(f"Error connecting to API: {e}")
     st.stop()
 
-
 # -----------------------------
 # SIDEBAR FILTERS
 # -----------------------------
@@ -244,7 +271,6 @@ st.sidebar.header("FILTERS")
 sheet_filter = st.sidebar.selectbox("DEPARTMENT", options=df["SOURCE_SHEET"].unique().tolist())
 client_filter = st.sidebar.text_input("CLIENT NAME")
 client_code_input = st.sidebar.text_input("Enter Client Code to Edit")
-
 
 # -----------------------------
 # FILTER DATA
@@ -254,7 +280,6 @@ if client_filter:
     filtered_df = filtered_df[
         filtered_df["CLIENT NAME"].str.contains(client_filter, case=False, na=False)
     ]
-
 
 # -----------------------------
 # SELECT COLUMNS BASED ON SHEET
@@ -271,7 +296,6 @@ columns_to_show = column_map.get(sheet_filter, filtered_df.columns.tolist())
 available_cols = [c for c in columns_to_show if c in filtered_df.columns]
 display_df = filtered_df[available_cols].copy()
 
-
 # -----------------------------
 # FILTER BY CLIENT CODE
 # -----------------------------
@@ -280,7 +304,6 @@ if client_code_input:
         display_df["CLIENT CODE"].astype(str).str.strip().str.lower() ==
         client_code_input.strip().lower()
     ].copy()
-
 
 # -----------------------------
 # FORMAT PREMIUM COLUMNS
@@ -295,41 +318,34 @@ for col in display_df.columns:
             )
         )
 
-
 # -----------------------------
 # COLOR HIGHLIGHT FUNCTION
 # -----------------------------
 def highlight_cross_sell(val):
     return "color: red; font-weight: bold;" if str(val).strip().lower() == "cross-sell" else ""
 
-
 # -----------------------------
-# DISPLAY TABLE (HTML to retain custom styling)
+# DISPLAY TABLE
 # -----------------------------
 styled_df = display_df.style.applymap(highlight_cross_sell).hide(axis="index")
-st.markdown(
-    '<div class="scroll-container">' + styled_df.to_html() + '</div>',
-    unsafe_allow_html=True
-)
-
+st.markdown('<div class="scroll-container">' + styled_df.to_html() + '</div>', unsafe_allow_html=True)
 
 # -----------------------------
-# EXPORT TO EXCEL (of the displayed table)
+# EXPORT TO EXCEL (Displayed table)
 # -----------------------------
 if not display_df.empty:
     excel_bytes = df_to_excel_bytes(display_df, sheet_name=sheet_filter or "Data")
     ts = time.strftime("%Y%m%d_%H%M%S")
     filename = f"office_of_customer_{sheet_filter}_{ts}.xlsx"
     st.download_button(
-        label="📥 Export displayed table to Excel",
+        label="📥 Export  to Excel",
         data=excel_bytes,
         file_name=filename,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        help="Downloads the currently displayed table (after filters) as an Excel file."
+        help="Download table as an Excel file."
     )
 else:
     st.info("No rows to export for the current filters.")
-
 
 # -----------------------------
 # EDIT SECTION
