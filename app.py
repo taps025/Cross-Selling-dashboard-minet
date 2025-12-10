@@ -4,12 +4,10 @@ import requests
 import pandas as pd
 import re
 import time
-import io
-import os
-import base64
+import io  # for in-memory Excel export
 
 # -----------------------------
-# PAGE CONFIG
+# PAGE CONFIG (wide layout improves responsiveness)
 # -----------------------------
 st.set_page_config(page_title="Office of the Customer Dashboard", layout="wide")
 
@@ -18,6 +16,7 @@ st.set_page_config(page_title="Office of the Customer Dashboard", layout="wide")
 # -----------------------------
 API_URL = "https://api-minet.onrender.com/data"
 UPDATE_URL = "https://api-minet.onrender.com/update"
+
 
 # -----------------------------
 # HELPERS
@@ -30,47 +29,38 @@ def canonicalize(name: str) -> str:
     base = re.sub(r"\s+", " ", base).strip()
     return base.upper()
 
+
 def df_to_excel_bytes(df: pd.DataFrame, sheet_name: str = "Data") -> bytes:
-    """Convert a DataFrame to an Excel file in-memory and return bytes."""
+    """
+    Convert a DataFrame to an Excel file in-memory and return bytes.
+    - Exports exactly what is in the DataFrame (after filters & formatting).
+    - Applies a simple column auto-fit for readability.
+    """
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name=sheet_name)
+
+        # Auto-fit column widths based on content length
         ws = writer.book[sheet_name]
         for column_cells in ws.iter_cols(min_row=1, max_row=ws.max_row, max_col=ws.max_column):
             max_len = 0
             for cell in column_cells:
-                val_len = len(str(cell.value)) if cell.value is not None else 0
+                try:
+                    val_len = len(str(cell.value)) if cell.value is not None else 0
+                except Exception:
+                    val_len = 0
                 if val_len > max_len:
                     max_len = val_len
             ws.column_dimensions[column_cells[0].column_letter].width = max_len + 2
+
     output.seek(0)
     return output.getvalue()
 
-def embed_image_base64(image_path: str) -> str:
-    """Return a data URI for an image, or empty string if not found."""
-    if not os.path.exists(image_path):
-        return ""
-    with open(image_path, "rb") as f:
-        data = f.read()
-    # Infer mime type
-    lower = image_path.lower()
-    if lower.endswith(".png"):
-        mime = "image/png"
-    elif lower.endswith(".jpg") or lower.endswith(".jpeg"):
-        mime = "image/jpeg"
-    elif lower.endswith(".svg"):
-        # Streamlit won't inline raw SVG here; prefer PNG/JPG.
-        # If you do use SVG, convert to PNG or serve via st.image.
-        mime = "image/svg+xml"
-    else:
-        mime = "image/png"
-    b64 = base64.b64encode(data).decode("utf-8")
-    return f"data:{mime};base64,{b64}"
 
 # -----------------------------
-# CSS & HEADER HTML
+# CUSTOM CSS (Auto-responsive + Dark-mode safe, no toggles)
 # -----------------------------
-CSS = '''
+st.markdown("""
 <style>
     /* Base container: mobile-first paddings */
     .block-container {
@@ -80,43 +70,17 @@ CSS = '''
         max-width: 100%;
     }
 
-    /* Header row with safe logo area */
-    .header-row {
-        display: grid;
-        grid-template-columns: auto 1fr;
-        align-items: center;
-        gap: 12px;
-        margin-bottom: 8px;
+    h1 {
+        margin-top: 0;
+        text-align: center;
+        line-height: 1.2;
     }
-    .logo-wrap {
-        padding: 6px 8px;               /* safe area to prevent clipping */
-        overflow: visible !important;    /* don't clip the img */
-    }
-    .logo-wrap img {
-        display: block;
-        max-height: 64px;                /* adjust to desired visual size */
-        width: auto;                     /* keep aspect ratio */
-        height: auto;
-        object-fit: contain;             /* avoid cropping */
-    }
-    .app-title {
-        margin: 0;
-        line-height: 1.15;
-        font-weight: 800;
-        font-size: 1.75rem;              /* desktop default */
-        color: #1f2937;
-        text-align: left;
-    }
-    @media (prefers-color-scheme: dark) {
-        .app-title { color: #f3f4f6; }
-    }
-    .stApp[data-theme="dark"] .app-title { color: #f3f4f6 !important; }
 
     /* Scroll area for table */
     .scroll-container {
-        max-height: 60vh;                /* use viewport height to fit screens */
+        max-height: 60vh;        /* use viewport height to fit screens */
         overflow-y: auto;
-        overflow-x: auto;                /* horizontal scroll for narrow devices */
+        overflow-x: auto;        /* horizontal scroll for narrow devices */
         border: 1px solid #ddd;
         padding: 8px;
         border-radius: 8px;
@@ -127,7 +91,7 @@ CSS = '''
     .scroll-container table {
         width: 100%;
         border-collapse: collapse;
-        table-layout: auto;              /* allow natural wrapping */
+        table-layout: auto;      /* allow natural wrapping */
         font-size: 0.92rem;
     }
 
@@ -142,7 +106,7 @@ CSS = '''
         text-transform: uppercase;
         letter-spacing: 0.02em;
         font-weight: 700;
-        white-space: normal;             /* allow wrapping */
+        white-space: normal;     /* allow wrapping */
         padding: 10px 12px;
     }
 
@@ -200,8 +164,7 @@ CSS = '''
 
     /* Typography scaling for phones */
     @media (max-width: 480px) {
-        .logo-wrap img { max-height: 48px; }
-        .app-title { font-size: 1.25rem; }
+        h1 { font-size: 1.15rem; }
         .scroll-container { max-height: 65vh; }
         .scroll-container table { font-size: 0.86rem; }
         .scroll-container table thead th,
@@ -210,40 +173,22 @@ CSS = '''
 
     /* Small tablets */
     @media (min-width: 481px) and (max-width: 768px) {
-        .app-title { font-size: 1.45rem; }
+        h1 { font-size: 1.3rem; }
         .scroll-container table { font-size: 0.9rem; }
     }
 </style>
-'''
+""", unsafe_allow_html=True)
 
-# Use Base64-embedded logo (bullet-proof across hosting)
-logo_path = "minet.png"   # <-- ensure this exists next to app.py (or change to assets/minet.png)
-logo_data_uri = embed_image_base64(logo_path)
 
-HEADER_HTML = f'''
-<div class="header-row">
-  <div class="logo-wrap">
-    {'<img src="' + logo_data_uri + '" alt="Minet logo">' if logo_data_uri else ''}
-  </div>
-  <h1 class="app-title">OFFICE OF THE CUSTOMER DASHBOARD</h1>
-</div>
-'''
+# -----------------------------
+# HEADER
+# -----------------------------
+col1, col2 = st.columns([2, 8])
+with col1:
+    st.image("minet.png", use_container_width=True)
+with col2:
+    st.markdown("<h1>OFFICE OF THE CUSTOMER DASHBOARD</h1>", unsafe_allow_html=True)
 
-# Inject CSS and header
-st.markdown(CSS, unsafe_allow_html=True)
-if logo_data_uri:
-    st.markdown(HEADER_HTML, unsafe_allow_html=True)
-else:
-    # Fallback showing a warning and attempt to render via st.image
-    st.warning("Logo file not found. Please ensure 'minet.png' is in the app directory.")
-    col_logo, col_title = st.columns([2, 8])
-    with col_logo:
-        try:
-            st.image(logo_path, use_container_width=True)
-        except Exception:
-            pass
-    with col_title:
-        st.markdown('<h1 class="app-title">OFFICE OF THE CUSTOMER DASHBOARD</h1>', unsafe_allow_html=True)
 
 # -----------------------------
 # LOAD DATA FROM API
@@ -255,31 +200,38 @@ try:
         headers={'Cache-Control': 'no-cache'},
         timeout=20
     )
+
     if response.status_code == 200:
         df = pd.DataFrame(response.json())
     else:
         st.error("Failed to fetch data from API.")
         st.stop()
+
 except Exception as e:
     st.error(f"Error connecting to API: {e}")
     st.stop()
 
+
 # -----------------------------
-# SIDEBAR FILTERS
+# SIDEBAR FILTERS (your existing functional filters)
 # -----------------------------
 st.sidebar.header("FILTERS")
+
 sheet_filter = st.sidebar.selectbox("DEPARTMENT", options=df["SOURCE_SHEET"].unique().tolist())
 client_filter = st.sidebar.text_input("CLIENT NAME")
 client_code_input = st.sidebar.text_input("Enter Client Code to Edit")
+
 
 # -----------------------------
 # FILTER DATA
 # -----------------------------
 filtered_df = df[df["SOURCE_SHEET"] == sheet_filter].copy()
+
 if client_filter:
     filtered_df = filtered_df[
         filtered_df["CLIENT NAME"].str.contains(client_filter, case=False, na=False)
     ]
+
 
 # -----------------------------
 # SELECT COLUMNS BASED ON SHEET
@@ -292,9 +244,11 @@ column_map = {
     "AFFINITY": ["CLIENT CODE", "CLIENT NAME", "PREMIUM:", "EMPLOYEE BENEFITS,", "STAFF SCHEMES,", "PERSONAL LINES,"],
     "MINING": ["CLIENT CODE", "CLIENT NAME", "PREMIUM`", "EMPLOYEE BENEFITS`", "AFFINITY`", "STAFF SCHEMES`", "PERSONAL LINES`"]
 }
+
 columns_to_show = column_map.get(sheet_filter, filtered_df.columns.tolist())
 available_cols = [c for c in columns_to_show if c in filtered_df.columns]
 display_df = filtered_df[available_cols].copy()
+
 
 # -----------------------------
 # FILTER BY CLIENT CODE
@@ -304,6 +258,7 @@ if client_code_input:
         display_df["CLIENT CODE"].astype(str).str.strip().str.lower() ==
         client_code_input.strip().lower()
     ].copy()
+
 
 # -----------------------------
 # FORMAT PREMIUM COLUMNS
@@ -318,34 +273,39 @@ for col in display_df.columns:
             )
         )
 
+
 # -----------------------------
 # COLOR HIGHLIGHT FUNCTION
 # -----------------------------
 def highlight_cross_sell(val):
     return "color: red; font-weight: bold;" if str(val).strip().lower() == "cross-sell" else ""
 
-# -----------------------------
-# DISPLAY TABLE
-# -----------------------------
-styled_df = display_df.style.applymap(highlight_cross_sell).hide(axis="index")
-st.markdown('<div class="scroll-container">' + styled_df.to_html() + '</div>', unsafe_allow_html=True)
 
 # -----------------------------
-# EXPORT TO EXCEL (Displayed table)
+# DISPLAY TABLE (HTML to retain custom styling)
+# -----------------------------
+styled_df = display_df.style.applymap(highlight_cross_sell).hide(axis="index")
+st.markdown(f'<div class="scroll-container">{styled_df.to_html()}</div>', unsafe_allow_html=True)
+
+
+# -----------------------------
+# EXPORT TO EXCEL (of the displayed table)
 # -----------------------------
 if not display_df.empty:
     excel_bytes = df_to_excel_bytes(display_df, sheet_name=sheet_filter or "Data")
     ts = time.strftime("%Y%m%d_%H%M%S")
     filename = f"office_of_customer_{sheet_filter}_{ts}.xlsx"
+
     st.download_button(
-        label="📥 Export  to Excel",
+        label="📥 Export to Excel",
         data=excel_bytes,
         file_name=filename,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        help="Download table as an Excel file."
+        help="Downloads toq Excel file."
     )
 else:
     st.info("No rows to export for the current filters.")
+
 
 # -----------------------------
 # EDIT SECTION
@@ -357,6 +317,7 @@ if client_code_input:
         st.markdown("### Edit Client Details")
 
         editable_cols = [c for c in display_df.columns if c not in ["CLIENT CODE", "CLIENT NAME"]]
+
         selected_col = st.selectbox("Select Column to Edit", options=editable_cols)
         new_value = st.selectbox("Select New Value", ["Cross-Sell", "Shared Client"])
 
@@ -367,6 +328,7 @@ if client_code_input:
                 "column": selected_col,
                 "new_value": new_value
             }
+
             try:
                 update_response = requests.post(
                     UPDATE_URL,
@@ -374,11 +336,16 @@ if client_code_input:
                     headers={'Cache-Control': 'no-cache'},
                     timeout=20
                 )
+
                 if update_response.status_code == 200:
                     st.success(update_response.json().get("message", "Updated successfully."))
+
+                    # Force refresh after update
                     time.sleep(1)
                     st.rerun()
+
                 else:
                     st.error(update_response.json().get("message", "Update failed."))
+
             except Exception as e:
                 st.error(f"Error updating API: {e}")
