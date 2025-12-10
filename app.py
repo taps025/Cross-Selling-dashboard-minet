@@ -25,8 +25,8 @@ def canonicalize(name: str) -> str:
     """Normalize names for matching in Excel/API."""
     if not isinstance(name, str):
         return ""
-    base = re.sub(r"[`\\.,:\\-]+", "", name)  # note: escaped backslash inside regex
-    base = re.sub(r"\\s+", " ", base).strip()
+    base = re.sub(r"[`\.,:\-]+", "", name)   # keep raw string; backtick is okay here
+    base = re.sub(r"\s+", " ", base).strip()
     return base.upper()
 
 
@@ -45,10 +45,7 @@ def df_to_excel_bytes(df: pd.DataFrame, sheet_name: str = "Data") -> bytes:
         for column_cells in ws.iter_cols(min_row=1, max_row=ws.max_row, max_col=ws.max_column):
             max_len = 0
             for cell in column_cells:
-                try:
-                    val_len = len(str(cell.value)) if cell.value is not None else 0
-                except Exception:
-                    val_len = 0
+                val_len = len(str(cell.value)) if cell.value is not None else 0
                 if val_len > max_len:
                     max_len = val_len
             ws.column_dimensions[column_cells[0].column_letter].width = max_len + 2
@@ -58,9 +55,9 @@ def df_to_excel_bytes(df: pd.DataFrame, sheet_name: str = "Data") -> bytes:
 
 
 # -----------------------------
-# CUSTOM CSS (Auto-responsive + Dark-mode safe + Logo-safe header)
+# CSS & HEADER HTML (use triple-single quotes to avoid unterminated strings)
 # -----------------------------
-st.markdown("""
+CSS = '''
 <style>
     /* Base container: mobile-first paddings */
     .block-container {
@@ -204,20 +201,20 @@ st.markdown("""
         .scroll-container table { font-size: 0.9rem; }
     }
 </style>
-""", unsafe_allow_html=True)
+'''
 
-
-# -----------------------------
-# HEADER (logo-safe HTML rendering)
-# -----------------------------
-st.markdown("""
+HEADER_HTML = '''
 <div class="header-row">
   <div class="logo-wrap">
     minet.png
   </div>
   <h1 class="app-title">OFFICE OF THE CUSTOMER DASHBOARD</h1>
 </div>
-""", unsafe_allow_html=True)
+'''
+
+# Inject CSS and header (no unterminated strings)
+st.markdown(CSS, unsafe_allow_html=True)
+st.markdown(HEADER_HTML, unsafe_allow_html=True)
 
 
 # -----------------------------
@@ -230,13 +227,11 @@ try:
         headers={'Cache-Control': 'no-cache'},
         timeout=20
     )
-
     if response.status_code == 200:
         df = pd.DataFrame(response.json())
     else:
         st.error("Failed to fetch data from API.")
         st.stop()
-
 except Exception as e:
     st.error(f"Error connecting to API: {e}")
     st.stop()
@@ -246,7 +241,6 @@ except Exception as e:
 # SIDEBAR FILTERS
 # -----------------------------
 st.sidebar.header("FILTERS")
-
 sheet_filter = st.sidebar.selectbox("DEPARTMENT", options=df["SOURCE_SHEET"].unique().tolist())
 client_filter = st.sidebar.text_input("CLIENT NAME")
 client_code_input = st.sidebar.text_input("Enter Client Code to Edit")
@@ -256,7 +250,6 @@ client_code_input = st.sidebar.text_input("Enter Client Code to Edit")
 # FILTER DATA
 # -----------------------------
 filtered_df = df[df["SOURCE_SHEET"] == sheet_filter].copy()
-
 if client_filter:
     filtered_df = filtered_df[
         filtered_df["CLIENT NAME"].str.contains(client_filter, case=False, na=False)
@@ -274,7 +267,6 @@ column_map = {
     "AFFINITY": ["CLIENT CODE", "CLIENT NAME", "PREMIUM:", "EMPLOYEE BENEFITS,", "STAFF SCHEMES,", "PERSONAL LINES,"],
     "MINING": ["CLIENT CODE", "CLIENT NAME", "PREMIUM`", "EMPLOYEE BENEFITS`", "AFFINITY`", "STAFF SCHEMES`", "PERSONAL LINES`"]
 }
-
 columns_to_show = column_map.get(sheet_filter, filtered_df.columns.tolist())
 available_cols = [c for c in columns_to_show if c in filtered_df.columns]
 display_df = filtered_df[available_cols].copy()
@@ -328,7 +320,6 @@ if not display_df.empty:
     excel_bytes = df_to_excel_bytes(display_df, sheet_name=sheet_filter or "Data")
     ts = time.strftime("%Y%m%d_%H%M%S")
     filename = f"office_of_customer_{sheet_filter}_{ts}.xlsx"
-
     st.download_button(
         label="📥 Export displayed table to Excel",
         data=excel_bytes,
@@ -350,7 +341,6 @@ if client_code_input:
         st.markdown("### Edit Client Details")
 
         editable_cols = [c for c in display_df.columns if c not in ["CLIENT CODE", "CLIENT NAME"]]
-
         selected_col = st.selectbox("Select Column to Edit", options=editable_cols)
         new_value = st.selectbox("Select New Value", ["Cross-Sell", "Shared Client"])
 
@@ -361,7 +351,6 @@ if client_code_input:
                 "column": selected_col,
                 "new_value": new_value
             }
-
             try:
                 update_response = requests.post(
                     UPDATE_URL,
@@ -369,16 +358,11 @@ if client_code_input:
                     headers={'Cache-Control': 'no-cache'},
                     timeout=20
                 )
-
                 if update_response.status_code == 200:
                     st.success(update_response.json().get("message", "Updated successfully."))
-
-                    # Force refresh after update
                     time.sleep(1)
                     st.rerun()
-
                 else:
                     st.error(update_response.json().get("message", "Update failed."))
-
             except Exception as e:
                 st.error(f"Error updating API: {e}")
