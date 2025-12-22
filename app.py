@@ -1,351 +1,223 @@
-
+# app2.py
+# ------------------------------------------------------------
+# Engagements viewer (dependent on main app)
+# ------------------------------------------------------------
 import streamlit as st
-import requests
 import pandas as pd
-import re
-import time
-import io  # for in-memory Excel export
+from pathlib import Path
 
-# -----------------------------
-# PAGE CONFIG (wide layout improves responsiveness)
-# -----------------------------
-st.set_page_config(page_title="Office of the Customer Dashboard", layout="wide")
-
-# -----------------------------
 # CONFIG
-# -----------------------------
-API_URL = "https://api-minet.onrender.com/data"
-UPDATE_URL = "https://api-minet.onrender.com/update"
+ENGAGEMENTS_LOCAL_CSV = "engagement_tracker.csv"
+TITLE_FONT_SIZE_REM = 10.0
+LOGO_WIDTH_PX = 150
+DUE_SOON_DAYS = 7
 
+st.set_page_config(page_title="CROSS-SELLING ENGAGEMENT TRACKER", layout="wide")
 
-# -----------------------------
-# HELPERS
-# -----------------------------
-def canonicalize(name: str) -> str:
-    """Normalize names for matching in Excel/API."""
-    if not isinstance(name, str):
-        return ""
-    base = re.sub(r"[`\.,:\-]+", "", name)
-    base = re.sub(r"\s+", " ", base).strip()
-    return base.upper()
+# Logo helper
+def find_logo(candidate_name: str = "minet.png"):
+    candidates = []
+    cwd = Path.cwd()
+    candidates += [cwd / candidate_name, cwd / "images" / candidate_name]
+    try:
+        script_dir = Path(__file__).parent
+    except NameError:
+        script_dir = None
+    if script_dir:
+        candidates += [
+            script_dir / candidate_name,
+            script_dir.parent / candidate_name,
+            script_dir / "images" / candidate_name,
+        ]
+    for p in candidates:
+        if p.exists() and p.is_file():
+            return p
+    return None
 
-
-def df_to_excel_bytes(df: pd.DataFrame, sheet_name: str = "Data") -> bytes:
-    """
-    Convert a DataFrame to an Excel file in-memory and return bytes.
-    - Exports exactly what is in the DataFrame (after filters & formatting).
-    - Applies a simple column auto-fit for readability.
-    """
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name=sheet_name)
-
-        # Auto-fit column widths based on content length
-        ws = writer.book[sheet_name]
-        for column_cells in ws.iter_cols(min_row=1, max_row=ws.max_row, max_col=ws.max_column):
-            max_len = 0
-            for cell in column_cells:
-                try:
-                    val_len = len(str(cell.value)) if cell.value is not None else 0
-                except Exception:
-                    val_len = 0
-                if val_len > max_len:
-                    max_len = val_len
-            ws.column_dimensions[column_cells[0].column_letter].width = max_len + 2
-
-    output.seek(0)
-    return output.getvalue()
-
-
-# -----------------------------
-# CUSTOM CSS (Auto-responsive + Dark-mode safe, no toggles)
-# -----------------------------
-st.markdown("""
-<style>
-    /* Base container: mobile-first paddings */
-    .block-container {
-        padding-top: 2.0rem !important;
-        padding-left: 0.75rem;
-        padding-right: 0.75rem;
-        max-width: 100%;
-    }
-
-    h1 {
-        margin-top: 0;
-        text-align: center;
-        line-height: 1.2;
-    }
-
-    /* Scroll area for table */
-    .scroll-container {
-        max-height: 60vh;        /* use viewport height to fit screens */
-        overflow-y: auto;
-        overflow-x: auto;        /* horizontal scroll for narrow devices */
-        border: 1px solid #ddd;
-        padding: 8px;
-        border-radius: 8px;
-        background: transparent;
-    }
-
-    /* Table fits width and wraps content */
-    .scroll-container table {
-        width: 100%;
-        border-collapse: collapse;
-        table-layout: auto;      /* allow natural wrapping */
-        font-size: 0.92rem;
-    }
-
-    /* Header (light mode default) */
-    .scroll-container table thead th {
-        position: sticky;
-        top: 0;
-        z-index: 2;
-        background-color: #f8f9fa;
-        color: #1f2937;
-        border-bottom: 1px solid #e5e7eb;
-        text-transform: uppercase;
-        letter-spacing: 0.02em;
-        font-weight: 700;
-        white-space: normal;     /* allow wrapping */
-        padding: 10px 12px;
-    }
-
-    /* Body cells */
-    .scroll-container table tbody td {
-        color: inherit;
-        padding: 10px 12px;
-        vertical-align: top;
-        word-wrap: break-word;
-        white-space: normal;
-        border-bottom: 1px solid #eee;
-    }
-
-    /* Dark-mode via OS/browser preference */
-    @media (prefers-color-scheme: dark) {
-        .scroll-container {
-            border-color: #374151;
-        }
-        .scroll-container table thead th {
-            background-color: #1f2937;
-            color: #f3f4f6;
-            border-bottom: 1px solid #374151;
-        }
-        /* Better scrollbar contrast in dark mode */
-        .scroll-container::-webkit-scrollbar {
-            width: 10px;
-            height: 10px;
-        }
-        .scroll-container::-webkit-scrollbar-thumb {
-            background-color: #4b5563;
-            border-radius: 6px;
-        }
-        .scroll-container::-webkit-scrollbar-track {
-            background-color: #1f2937;
-        }
-    }
-
-    /* Dark-mode via Streamlit theme flag */
-    .stApp[data-theme="dark"] .scroll-container table thead th {
-        background-color: #1f2937 !important;
-        color: #f3f4f6 !important;
-        border-bottom: 1px solid #374151 !important;
-    }
-
-    /* Sticky first column for wider screens only */
-    @media (min-width: 600px) {
-        .scroll-container table tbody td:first-child,
-        .scroll-container table thead th:first-child {
-            position: sticky;
-            left: 0;
-            background-clip: padding-box;
-            background-color: inherit;
-        }
-    }
-
-    /* Typography scaling for phones */
-    @media (max-width: 480px) {
-        h1 { font-size: 1.15rem; }
-        .scroll-container { max-height: 65vh; }
-        .scroll-container table { font-size: 0.86rem; }
-        .scroll-container table thead th,
-        .scroll-container table tbody td { padding: 8px 10px; }
-    }
-
-    /* Small tablets */
-    @media (min-width: 481px) and (max-width: 768px) {
-        h1 { font-size: 1.3rem; }
-        .scroll-container table { font-size: 0.9rem; }
-    }
-</style>
-""", unsafe_allow_html=True)
-
-
-# -----------------------------
-# HEADER
-# -----------------------------
-col1, col2 = st.columns([2, 8])
-with col1:
-    st.image("minet.png", use_container_width=True)
-with col2:
-    st.markdown("<h1>OFFICE OF THE CUSTOMER DASHBOARD</h1>", unsafe_allow_html=True)
-
-
-# -----------------------------
-# LOAD DATA FROM API
-# -----------------------------
-try:
-    response = requests.get(
-        API_URL,
-        params={'_ts': int(time.time())},
-        headers={'Cache-Control': 'no-cache'},
-        timeout=20
+# Header
+def render_header_inline(title_text: str):
+    st.markdown(
+        f"""
+        <style>
+        .header-title {{
+            font-size: {TITLE_FONT_SIZE_REM}rem;
+            font-weight: bold;
+            line-height: 1.1;
+            margin: 10;
+        }}
+        .header-block {{
+            margin-bottom: 0.5rem;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
     )
+    with st.container():
+        col_logo, col_title = st.columns([1, 6], vertical_alignment="center")
+        with col_logo:
+            logo_path = find_logo("minet.png")
+            if logo_path:
+                st.image(str(logo_path), width=LOGO_WIDTH_PX)
+            else:
+                st.empty()
+        with col_title:
+            st.markdown(
+                f"<div class='header-block'><h2 class='header-title'>{title_text}</h2></div>",
+                unsafe_allow_html=True,
+            )
 
-    if response.status_code == 200:
-        df = pd.DataFrame(response.json())
-    else:
-        st.error("Failed to fetch data from API.")
-        st.stop()
+# Data helpers
+def normalize_engagement_df(df_e: pd.DataFrame) -> pd.DataFrame:
+    cols = [
+        "ID", "Client Name", "Facilitator", "Facilitator Email",
+        "Date", "Type", "Notes", "Status", "Flag", "Reminder Sent At",
+    ]
+    if df_e.empty:
+        return pd.DataFrame(columns=cols)
+    df_e = df_e.rename(columns={
+        "id": "ID",
+        "client_name": "Client Name",
+        "facilitator": "Facilitator",
+        "facilitator_email": "Facilitator Email",
+        "date": "Date",  # internal name stays "Date"
+        "type": "Type",
+        "notes": "Notes",
+        "status": "Status",
+        "flag": "Flag",
+        "reminder_sent_at": "Reminder Sent At",
+    })
+    for c in cols:
+        if c not in df_e.columns:
+            df_e[c] = ""
+    def parse_date(x):
+        if pd.isna(x) or str(x).strip() == "":
+            return ""
+        try:
+            # keep a standard ISO for internal use
+            return pd.to_datetime(str(x)).date().isoformat()
+        except Exception:
+            return str(x)
+    df_e["Date"] = df_e["Date"].apply(parse_date)
+    df_e["Status"] = df_e["Status"].replace("", "Open")
+    return df_e[cols]
 
-except Exception as e:
-    st.error(f"Error connecting to API: {e}")
+def load_engagements() -> pd.DataFrame:
+    csv_script = (Path(__file__).parent / ENGAGEMENTS_LOCAL_CSV) if "__file__" in globals() else None
+    csv_cwd = Path.cwd() / ENGAGEMENTS_LOCAL_CSV
+    for p in [csv_script, csv_cwd]:
+        if p and p.exists():
+            try:
+                return normalize_engagement_df(pd.read_csv(p))
+            except Exception as e:
+                st.error(f"Failed to read {p}: {e}")
+                return normalize_engagement_df(pd.DataFrame())
+    return normalize_engagement_df(pd.DataFrame())
+
+# Flag logic
+def compute_flags(df_in: pd.DataFrame) -> pd.DataFrame:
+    df = df_in.copy()
+    today = pd.Timestamp.today().normalize()
+    dt = pd.to_datetime(df["Date"], errors="coerce")
+    status_lower = df["Status"].astype(str).str.lower()
+    is_closed = status_lower == "closed"
+    is_open = ~is_closed
+    has_date = dt.notna()
+    df["Flag"] = ""
+    df.loc[is_closed, "Flag"] = "Actioned"
+    delta_days = (dt - today).dt.days
+    df.loc[is_open & has_date & (delta_days < 0), "Flag"] = "Late"
+    df.loc[is_open & has_date & (delta_days == 0), "Flag"] = "Due soon"
+    df.loc[is_open & has_date & (delta_days > 0) & (delta_days <= DUE_SOON_DAYS), "Flag"] = "Due soon"
+    df.loc[is_open & has_date & (delta_days > DUE_SOON_DAYS), "Flag"] = "Upcoming"
+    return df
+
+
+# Styling
+def style_flags(df_in: pd.DataFrame, show_cols: list[str]):
+    def flag_style(val: str) -> str:
+        v = (val or "").strip().lower()
+        if v.startswith("late"): return "background-color:#dc2626;color:white;font-weight:600;"
+        if v.startswith("due soon"): return "background-color:#f59e0b;color:black;font-weight:600;"
+        if v.startswith("actioned"): return "background-color:#16a34a;color:white;font-weight:600;"
+        if v.startswith("upcoming"): return "background-color:#93c5fd;color:black;font-weight:600;"
+        return ""
+    return df_in[show_cols].style.applymap(flag_style, subset=["Flag"])
+
+# UI
+render_header_inline("CROSS-SELLING ENGAGEMENT TRACKER")
+df = load_engagements()
+if df.empty:
+    st.info("No engagement entries found yet.")
     st.stop()
 
+df = compute_flags(df)
 
-# -----------------------------
-# SIDEBAR FILTERS (your existing functional filters)
-# -----------------------------
+# Build month range from internal "Date"
+date_parsed = pd.to_datetime(df["Date"], errors="coerce")
+min_date = date_parsed.min()
+max_date = date_parsed.max()
+if pd.isna(min_date) or pd.isna(max_date):
+    base = pd.Timestamp.today().normalize().replace(day=1)
+    min_date = base
+    max_date = base
+
+start_period = min_date.to_period("M")
+end_period = max_date.to_period("M")
+all_periods = pd.period_range(start=start_period, end=end_period, freq="M")
+
+def month_label(p: pd.Period) -> str:
+    return p.to_timestamp().strftime("%B %Y")
+
+month_labels = [month_label(p) for p in all_periods]
+label_to_period = {month_label(p): p for p in all_periods}
+
+# Sidebar filters
 st.sidebar.header("FILTERS")
+facilitators = sorted([f for f in df["Facilitator"].dropna().unique().tolist() if str(f).strip() != ""])
+facilitator_sel = st.sidebar.selectbox("Facilitator", options=["(All)"] + facilitators, index=0)
+status_options = ["Open", "Closed"]
+status_sel = st.sidebar.multiselect("Status", options=status_options, default=status_options)
+months_sel = st.sidebar.multiselect("Months", options=month_labels, default=month_labels)
 
-sheet_filter = st.sidebar.selectbox("DEPARTMENT", options=df["SOURCE_SHEET"].unique().tolist())
-client_filter = st.sidebar.text_input("CLIENT NAME")
-client_code_input = st.sidebar.text_input("Enter Client Code to Edit")
+# Apply filters
+df_view = df.copy()
+if facilitator_sel and facilitator_sel != "(All)":
+    df_view = df_view[df_view["Facilitator"] == facilitator_sel]
+if status_sel and len(status_sel) > 0:
+    df_view = df_view[df_view["Status"].isin(status_sel)]
 
+df_view["_month_period"] = pd.to_datetime(df_view["Date"], errors="coerce").dt.to_period("M")
+if months_sel and len(months_sel) > 0:
+    selected_periods = {label_to_period[m] for m in months_sel if m in label_to_period}
+    df_view = df_view[df_view["_month_period"].isin(selected_periods)]
 
-# -----------------------------
-# FILTER DATA
-# -----------------------------
-filtered_df = df[df["SOURCE_SHEET"] == sheet_filter].copy()
+# Sort by internal Date descending
+if "Date" in df_view.columns:
+    with pd.option_context("mode.chained_assignment", None):
+        df_view["_DateParsed"] = pd.to_datetime(df_view["Date"], errors="coerce")
+        df_view = df_view.sort_values(by="_DateParsed", ascending=False).drop(columns=["_DateParsed"])
+df_view = df_view.drop(columns=["_month_period"], errors="ignore")
 
-if client_filter:
-    filtered_df = filtered_df[
-        filtered_df["CLIENT NAME"].str.contains(client_filter, case=False, na=False)
-    ]
+# --- Presentation layer ---
+# 1) Rename column header for the UI
+df_display = df_view.rename(columns={"Date": "Date of cross-sell engagement"})
 
+# 2) Format date values as "DD Month YYYY" (e.g., 16 December 2025)
+with pd.option_context("mode.chained_assignment", None):
+    date_series = pd.to_datetime(df_display["Date of cross-sell engagement"], errors="coerce")
+    # Format: Day (2-digit), Full Month Name, Year
+    df_display["Date of cross-sell engagement"] = date_series.dt.strftime("%d %B %Y")
+    # For rows with invalid/blank dates, keep as empty string
+    df_display["Date of cross-sell engagement"] = df_display["Date of cross-sell engagement"].fillna("")
 
-# -----------------------------
-# SELECT COLUMNS BASED ON SHEET
-# -----------------------------
-column_map = {
-    "SS": ["CLIENT CODE", "CLIENT NAME", "PREMIUM,", "CORPORATE.", "PERSONAL LINES.", "AFFINITY.", "EMPLOYEE BENEFITS."],
-    "corp": ["CLIENT CODE", "CLIENT NAME", "PREMIUM.", "EMPLOYEE BENEFITS", "PERSONAL LINES", "STAFF SCHEMES"],
-    "EB": ["CLIENT CODE", "CLIENT NAME", "PREMIUM", "CORPORATE-", "AFFINITY-", "STAFF SCHEMES-", "PERSONAL LINES-"],
-    "PLD": ["CLIENT CODE", "CLIENT NAME", "PREMIUM;", "CORPORATE:", "STAFF SCHEMES:", "EMPLOYEE BENEFITS:", "AFFINITY:", "MINING:"],
-    "AFFINITY": ["CLIENT CODE", "CLIENT NAME", "PREMIUM:", "EMPLOYEE BENEFITS,", "STAFF SCHEMES,", "PERSONAL LINES,"],
-    "MINING": ["CLIENT CODE", "CLIENT NAME", "PREMIUM`", "EMPLOYEE BENEFITS`", "AFFINITY`", "STAFF SCHEMES`", "PERSONAL LINES`"]
-}
+fixed_cols_in_order = [
+    "Facilitator", "Client Name", "Date of cross-sell engagement", "Type", "Notes", "Status", "Flag",
+]
+available_cols = [c for c in fixed_cols_in_order if c in df_display.columns]
 
-columns_to_show = column_map.get(sheet_filter, filtered_df.columns.tolist())
-available_cols = [c for c in columns_to_show if c in filtered_df.columns]
-display_df = filtered_df[available_cols].copy()
-
-
-# -----------------------------
-# FILTER BY CLIENT CODE
-# -----------------------------
-if client_code_input:
-    display_df = display_df[
-        display_df["CLIENT CODE"].astype(str).str.strip().str.lower() ==
-        client_code_input.strip().lower()
-    ].copy()
-
-
-# -----------------------------
-# FORMAT PREMIUM COLUMNS
-# -----------------------------
-for col in display_df.columns:
-    if "PREMIUM" in col.upper():
-        display_df.loc[:, col] = display_df[col].apply(
-            lambda x: (
-                f"{float(x):,.2f}"
-                if pd.notnull(x) and str(x).replace('.', '', 1).isdigit()
-                else x
-            )
-        )
-
-
-# -----------------------------
-# COLOR HIGHLIGHT FUNCTION
-# -----------------------------
-def highlight_cross_sell(val):
-    return "color: red; font-weight: bold;" if str(val).strip().lower() == "cross-sell" else ""
-
-
-# -----------------------------
-# DISPLAY TABLE (HTML to retain custom styling)
-# -----------------------------
-styled_df = display_df.style.applymap(highlight_cross_sell).hide(axis="index")
-st.markdown(f'<div class="scroll-container">{styled_df.to_html()}</div>', unsafe_allow_html=True)
-
-
-# -----------------------------
-# EXPORT TO EXCEL (of the displayed table)
-# -----------------------------
-if not display_df.empty:
-    excel_bytes = df_to_excel_bytes(display_df, sheet_name=sheet_filter or "Data")
-    ts = time.strftime("%Y%m%d_%H%M%S")
-    filename = f"office_of_customer_{sheet_filter}_{ts}.xlsx"
-
-    st.download_button(
-        label="📥 Export to Excel",
-        data=excel_bytes,
-        file_name=filename,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        help="Downloads toq Excel file."
-    )
+if df_display.empty or not available_cols:
+    st.info("No engagements available to display.")
 else:
-    st.info("No rows to export for the current filters.")
+    styled = style_flags(df_display, available_cols)
+    st.markdown(styled.to_html(), unsafe_allow_html=True)
 
-
-# -----------------------------
-# EDIT SECTION
-# -----------------------------
-if client_code_input:
-    if display_df.empty:
-        st.warning("No client found with that code.")
-    else:
-        st.markdown("### Edit Client Details")
-
-        editable_cols = [c for c in display_df.columns if c not in ["CLIENT CODE", "CLIENT NAME"]]
-
-        selected_col = st.selectbox("Select Column to Edit", options=editable_cols)
-        new_value = st.selectbox("Select New Value", ["Cross-Sell", "Shared Client"])
-
-        if st.button("Apply Change"):
-            payload = {
-                "sheet": sheet_filter,
-                "client_code": client_code_input.strip(),
-                "column": selected_col,
-                "new_value": new_value
-            }
-
-            try:
-                update_response = requests.post(
-                    UPDATE_URL,
-                    json=payload,
-                    headers={'Cache-Control': 'no-cache'},
-                    timeout=20
-                )
-
-                if update_response.status_code == 200:
-                    st.success(update_response.json().get("message", "Updated successfully."))
-
-                    # Force refresh after update
-                    time.sleep(1)
-                    st.rerun()
-
-                else:
-                    st.error(update_response.json().get("message", "Update failed."))
-
-            except Exception as e:
-                st.error(f"Error updating API: {e}")
