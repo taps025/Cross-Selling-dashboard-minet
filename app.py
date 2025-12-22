@@ -1,223 +1,547 @@
-# app2.py
-# ------------------------------------------------------------
-# Engagements viewer (dependent on main app)
-# ------------------------------------------------------------
+
 import streamlit as st
+import requests
 import pandas as pd
-from pathlib import Path
+import re
+import time
+import os
+import base64
+from datetime import date
 
+# ------------------------------
+# PAGE CONFIG
+# ------------------------------
+st.set_page_config(page_title="Office of the Customer Dashboard", layout="wide")
+
+# ------------------------------
 # CONFIG
+# ------------------------------
+API_URL = "https://api-minet.onrender.com/data"          # main data
+UPDATE_URL = "https://api-minet.onrender.com/update"      # update endpoint for table edits
+
+# Engagement tracker endpoints (optional; if None -> local CSV persistence)
+ENGAGEMENTS_URL = None          # e.g., "https://api-minet.onrender.com/engagements"
+ENGAGEMENTS_ADD_URL = None      # e.g., "https://api-minet.onrender.com/engagements/add"
+ENGAGEMENTS_UPDATE_URL = None   # e.g., "https://api-minet.onrender.com/engagements/update"
 ENGAGEMENTS_LOCAL_CSV = "engagement_tracker.csv"
-TITLE_FONT_SIZE_REM = 10.0
-LOGO_WIDTH_PX = 150
-DUE_SOON_DAYS = 7
 
-st.set_page_config(page_title="CROSS-SELLING ENGAGEMENT TRACKER", layout="wide")
-
-# Logo helper
-def find_logo(candidate_name: str = "minet.png"):
-    candidates = []
-    cwd = Path.cwd()
-    candidates += [cwd / candidate_name, cwd / "images" / candidate_name]
-    try:
-        script_dir = Path(__file__).parent
-    except NameError:
-        script_dir = None
-    if script_dir:
-        candidates += [
-            script_dir / candidate_name,
-            script_dir.parent / candidate_name,
-            script_dir / "images" / candidate_name,
-        ]
-    for p in candidates:
-        if p.exists() and p.is_file():
-            return p
-    return None
-
-# Header
-def render_header_inline(title_text: str):
-    st.markdown(
-        f"""
-        <style>
-        .header-title {{
-            font-size: {TITLE_FONT_SIZE_REM}rem;
-            font-weight: bold;
-            line-height: 1.1;
-            margin: 10;
-        }}
-        .header-block {{
-            margin-bottom: 0.5rem;
-        }}
-        </style>
-        """,
-        unsafe_allow_html=True,
+# ------------------------------
+# ROUTING via st.query_params
+# ------------------------------
+params = st.query_params
+route_param = params.get("route", None)
+if route_param is None:
+    route = st.session_state.get("_route", "dashboard")
+else:
+    # supports both str and list values
+    route = route_param if isinstance(route_param, str) else (
+        route_param[0] if isinstance(route_param, list) and route_param else "dashboard"
     )
-    with st.container():
-        col_logo, col_title = st.columns([1, 6], vertical_alignment="center")
-        with col_logo:
-            logo_path = find_logo("minet.png")
-            if logo_path:
-                st.image(str(logo_path), width=LOGO_WIDTH_PX)
-            else:
-                st.empty()
-        with col_title:
-            st.markdown(
-                f"<div class='header-block'><h2 class='header-title'>{title_text}</h2></div>",
-                unsafe_allow_html=True,
-            )
+st.session_state["_route"] = route
 
-# Data helpers
+def go_to(route_name: str):
+    """Navigate by setting URL query params and rerunning (main flow-safe)."""
+    st.session_state["_route"] = route_name
+    st.query_params.update({"route": route_name})  # update URL
+    st.rerun()  # called from main flow
+
+def go_home():
+    """Clear route and go back to dashboard (main flow-safe)."""
+    st.session_state["_route"] = "dashboard"
+    st.query_params.clear()  # remove query params
+    st.rerun()  # called from main flow
+
+# ------------------------------
+# HELPERS
+# ------------------------------
+def canonicalize(name: str) -> str:
+    """Normalize names for matching in Excel/API."""
+    if not isinstance(name, str):
+        return ""
+    base = re.sub(r"[`\.,:\-\[\]]+", "", name)  # strip punctuation we often see in sheets
+    base = re.sub(r"\s+", " ", base).strip()
+    return base.upper()
+
+def embed_image_base64(image_path: str) -> str:
+    """Return a data URI for an image, or empty string if not found."""
+    if not os.path.exists(image_path):
+        return ""
+    with open(image_path, "rb") as f:
+        data = f.read()
+    lower = image_path.lower()
+    if lower.endswith(".png"):
+        mime = "image/png"
+    elif lower.endswith(".jpg") or lower.endswith(".jpeg"):
+        mime = "image/jpeg"
+    else:
+        mime = "image/png"
+    b64 = base64.b64encode(data).decode("utf-8")
+    return "data:" + mime + ";base64," + b64
+
+# ---- Engagement Tracker I/O (local-first with optional API) ----
 def normalize_engagement_df(df_e: pd.DataFrame) -> pd.DataFrame:
+    """Ensure standard columns and types for engagement tracker."""
     cols = [
         "ID", "Client Name", "Facilitator", "Facilitator Email",
-        "Date", "Type", "Notes", "Status", "Flag", "Reminder Sent At",
+        "Date", "Type", "Notes", "Status", "Reminder Sent At"
     ]
     if df_e.empty:
         return pd.DataFrame(columns=cols)
-    df_e = df_e.rename(columns={
+
+    rename_map = {
         "id": "ID",
         "client_name": "Client Name",
         "facilitator": "Facilitator",
         "facilitator_email": "Facilitator Email",
-        "date": "Date",  # internal name stays "Date"
+        "date": "Date",
         "type": "Type",
         "notes": "Notes",
         "status": "Status",
-        "flag": "Flag",
         "reminder_sent_at": "Reminder Sent At",
-    })
+    }
+    df_e = df_e.rename(columns=rename_map)
+
     for c in cols:
         if c not in df_e.columns:
             df_e[c] = ""
-    def parse_date(x):
+
+    def fmt_date(x):
         if pd.isna(x) or str(x).strip() == "":
             return ""
         try:
-            # keep a standard ISO for internal use
             return pd.to_datetime(str(x)).date().isoformat()
         except Exception:
             return str(x)
-    df_e["Date"] = df_e["Date"].apply(parse_date)
+
+    df_e["Date"] = df_e["Date"].apply(fmt_date)
     df_e["Status"] = df_e["Status"].replace("", "Open")
     return df_e[cols]
 
 def load_engagements() -> pd.DataFrame:
-    csv_script = (Path(__file__).parent / ENGAGEMENTS_LOCAL_CSV) if "__file__" in globals() else None
-    csv_cwd = Path.cwd() / ENGAGEMENTS_LOCAL_CSV
-    for p in [csv_script, csv_cwd]:
-        if p and p.exists():
-            try:
-                return normalize_engagement_df(pd.read_csv(p))
-            except Exception as e:
-                st.error(f"Failed to read {p}: {e}")
-                return normalize_engagement_df(pd.DataFrame())
+    """Load engagements from remote API if configured, else from local CSV."""
+    if ENGAGEMENTS_URL:
+        try:
+            r = requests.get(ENGAGEMENTS_URL, params={'_ts': int(time.time())}, timeout=20)
+            if r.status_code == 200:
+                return normalize_engagement_df(pd.DataFrame(r.json()))
+        except Exception:
+            pass
+
+    if os.path.exists(ENGAGEMENTS_LOCAL_CSV):
+        try:
+            return normalize_engagement_df(pd.read_csv(ENGAGEMENTS_LOCAL_CSV))
+        except Exception:
+            pass
+
     return normalize_engagement_df(pd.DataFrame())
 
-# Flag logic
-def compute_flags(df_in: pd.DataFrame) -> pd.DataFrame:
-    df = df_in.copy()
-    today = pd.Timestamp.today().normalize()
-    dt = pd.to_datetime(df["Date"], errors="coerce")
-    status_lower = df["Status"].astype(str).str.lower()
-    is_closed = status_lower == "closed"
-    is_open = ~is_closed
-    has_date = dt.notna()
-    df["Flag"] = ""
-    df.loc[is_closed, "Flag"] = "Actioned"
-    delta_days = (dt - today).dt.days
-    df.loc[is_open & has_date & (delta_days < 0), "Flag"] = "Late"
-    df.loc[is_open & has_date & (delta_days == 0), "Flag"] = "Due soon"
-    df.loc[is_open & has_date & (delta_days > 0) & (delta_days <= DUE_SOON_DAYS), "Flag"] = "Due soon"
-    df.loc[is_open & has_date & (delta_days > DUE_SOON_DAYS), "Flag"] = "Upcoming"
-    return df
+def save_engagement(client_name: str, facilitator: str, facilitator_email: str, dt: date, etype: str, notes: str) -> bool:
+    """Save engagement via remote API if configured; else append to local CSV."""
+    new_id = "E-" + str(int(time.time() * 1000))  # simple unique ID
+    payload = {
+        "id": new_id,
+        "client_name": client_name,
+        "facilitator": facilitator,
+        "facilitator_email": facilitator_email or "",
+        "date": pd.to_datetime(dt).date().isoformat() if dt else "",
+        "type": etype or "",
+        "notes": notes or "",
+        "status": "Open",
+    }
 
+    if ENGAGEMENTS_ADD_URL:
+        try:
+            r = requests.post(ENGAGEMENTS_ADD_URL, json=payload, timeout=20)
+            return r.status_code == 200
+        except Exception:
+            pass
 
-# Styling
-def style_flags(df_in: pd.DataFrame, show_cols: list[str]):
-    def flag_style(val: str) -> str:
-        v = (val or "").strip().lower()
-        if v.startswith("late"): return "background-color:#dc2626;color:white;font-weight:600;"
-        if v.startswith("due soon"): return "background-color:#f59e0b;color:black;font-weight:600;"
-        if v.startswith("actioned"): return "background-color:#16a34a;color:white;font-weight:600;"
-        if v.startswith("upcoming"): return "background-color:#93c5fd;color:black;font-weight:600;"
-        return ""
-    return df_in[show_cols].style.applymap(flag_style, subset=["Flag"])
+    # Local CSV persistence
+    df_e = load_engagements()
+    new_row = {
+        "ID": payload["id"],
+        "Client Name": payload["client_name"],
+        "Facilitator": payload["facilitator"],
+        "Facilitator Email": payload["facilitator_email"],
+        "Date": payload["date"],
+        "Type": payload["type"],
+        "Notes": payload["notes"],
+        "Status": payload["status"],
+        "Reminder Sent At": "",
+    }
+    df_e = pd.concat([df_e, pd.DataFrame([new_row])], ignore_index=True)
+    df_e.to_csv(ENGAGEMENTS_LOCAL_CSV, index=False)
+    return True
 
-# UI
-render_header_inline("CROSS-SELLING ENGAGEMENT TRACKER")
-df = load_engagements()
-if df.empty:
-    st.info("No engagement entries found yet.")
-    st.stop()
+def update_engagement_status(eng_id: str, new_status: str) -> bool:
+    """Update status by ID."""
+    if ENGAGEMENTS_UPDATE_URL:
+        try:
+            r = requests.post(ENGAGEMENTS_UPDATE_URL, json={"id": eng_id, "status": new_status}, timeout=20)
+            return r.status_code == 200
+        except Exception:
+            pass
 
-df = compute_flags(df)
+    # Local
+    df_e = load_engagements()
+    if df_e.empty:
+        return False
+    idx = df_e.index[df_e["ID"] == eng_id]
+    if len(idx) == 0:
+        return False
+    df_e.loc[idx, "Status"] = new_status
+    df_e.to_csv(ENGAGEMENTS_LOCAL_CSV, index=False)
+    return True
 
-# Build month range from internal "Date"
-date_parsed = pd.to_datetime(df["Date"], errors="coerce")
-min_date = date_parsed.min()
-max_date = date_parsed.max()
-if pd.isna(min_date) or pd.isna(max_date):
-    base = pd.Timestamp.today().normalize().replace(day=1)
-    min_date = base
-    max_date = base
+# ------------------------------
+# CSS (responsive + dark-safe + logo-safe)
+# ------------------------------
+CSS = '''
+<style>
+  .block-container {
+    padding-top: 2.0rem !important;
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+    max-width: 100%;
+  }
+  .header-row {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 8px;
+  }
+  .logo-wrap { padding: 6px 8px; overflow: visible !important; }
+  .logo-wrap img { display: block; max-height: 64px; width: auto; height: auto; object-fit: contain; }
+  .app-title { margin: 0; line-height: 1.1; font-weight: 800; font-size: 1.9rem; color: #1f2937; text-align: left; letter-spacing: 0.02em; }
+  @media (prefers-color-scheme: dark) { .app-title { color: #f3f4f6; } }
+  .stApp[data-theme="dark"] .app-title { color: #f3f4f6 !important; }
+  .scroll-container {
+    max-height: 60vh; overflow-y: auto; overflow-x: auto; border: 1px solid #ddd; padding: 8px; border-radius: 8px; background: transparent;
+  }
+  .scroll-container table { width: 100%; border-collapse: collapse; table-layout: auto; font-size: 0.92rem; }
+  .scroll-container table thead th {
+    position: sticky; top: 0; z-index: 2; background-color: #f8f9fa; color: #1f2937; border-bottom: 1px solid #e5e7eb;
+    text-transform: uppercase; letter-spacing: 0.02em; font-weight: 700; white-space: normal; padding: 10px 12px;
+  }
+  .scroll-container table tbody td {
+    color: inherit; padding: 10px 12px; vertical-align: top; word-wrap: break-word; white-space: normal; border-bottom: 1px solid #eee;
+  }
+  @media (prefers-color-scheme: dark) {
+    .scroll-container { border-color: #374151; }
+    .scroll-container table thead th { background-color: #1f2937; color: #f3f4f6; border-bottom: 1px solid #374151; }
+    .scroll-container::-webkit-scrollbar { width: 10px; height: 10px; }
+    .scroll-container::-webkit-scrollbar-thumb { background-color: #4b5563; border-radius: 6px; }
+    .scroll-container::-webkit-scrollbar-track { background-color: #1f2937; }
+  }
+  .stApp[data-theme="dark"] .scroll-container table thead th { background-color: #1f2937 !important; color: #f3f4f6 !important; border-bottom: 1px solid #374151 !important; }
+  @media (min-width: 600px) {
+    .scroll-container table tbody td:first-child, .scroll-container table thead th:first-child {
+      position: sticky; left: 0; background-clip: padding-box; background-color: inherit;
+    }
+  }
+  @media (max-width: 480px) {
+    .logo-wrap img { max-height: 48px; }
+    .app-title { font-size: 1.45rem; }
+    .scroll-container { max-height: 65vh; }
+    .scroll-container table { font-size: 0.86rem; }
+    .scroll-container table thead th, .scroll-container table tbody td { padding: 8px 10px; }
+  }
+</style>
+'''
+st.markdown(CSS, unsafe_allow_html=True)
 
-start_period = min_date.to_period("M")
-end_period = max_date.to_period("M")
-all_periods = pd.period_range(start=start_period, end=end_period, freq="M")
+# ------------------------------
+# HEADER (embedded logo)
+# ------------------------------
+logo_path = "minet.png"  # ensure this file exists next to app.py (or change path)
+logo_data_uri = embed_image_base64(logo_path)
 
-def month_label(p: pd.Period) -> str:
-    return p.to_timestamp().strftime("%B %Y")
+def render_header(title_text: str):
+    if logo_data_uri:
+        header_html = (
+            '<div class="header-row">'
+            '<div class="logo-wrap"><img src="' + logo_data_uri + '" alt="Minet logo"></div>'
+            '<h1 class="app-title">' + title_text + '</h1>'
+            '</div>'
+        )
+    else:
+        header_html = '<h1 class="app-title">' + title_text + '</h1>'
+    st.markdown(header_html, unsafe_allow_html=True)
 
-month_labels = [month_label(p) for p in all_periods]
-label_to_period = {month_label(p): p for p in all_periods}
+# ------------------------------
+# LOAD DATA FROM API (for dashboard and engagement dropdown)
+# ------------------------------
+def load_main_data() -> pd.DataFrame:
+    try:
+        response = requests.get(
+            API_URL,
+            params={'_ts': int(time.time())},
+            headers={'Cache-Control': 'no-cache'},
+            timeout=20
+        )
+        if response.status_code == 200:
+            return pd.DataFrame(response.json())
+        else:
+            st.error("Failed to fetch data from API.")
+            return pd.DataFrame()
+    except Exception as e:
+        st.error("Error connecting to API: " + str(e))
+        return pd.DataFrame()
 
-# Sidebar filters
-st.sidebar.header("FILTERS")
-facilitators = sorted([f for f in df["Facilitator"].dropna().unique().tolist() if str(f).strip() != ""])
-facilitator_sel = st.sidebar.selectbox("Facilitator", options=["(All)"] + facilitators, index=0)
-status_options = ["Open", "Closed"]
-status_sel = st.sidebar.multiselect("Status", options=status_options, default=status_options)
-months_sel = st.sidebar.multiselect("Months", options=month_labels, default=month_labels)
+df = load_main_data()
 
-# Apply filters
-df_view = df.copy()
-if facilitator_sel and facilitator_sel != "(All)":
-    df_view = df_view[df_view["Facilitator"] == facilitator_sel]
-if status_sel and len(status_sel) > 0:
-    df_view = df_view[df_view["Status"].isin(status_sel)]
+# ------------------------------
+# SHARED SIDEBAR (adds Go to filter)
+# ------------------------------
+def render_sidebar(route_current: str, df_for_options: pd.DataFrame):
+    st.sidebar.header("FILTERS")
+    # "Go to" filter to switch views
+    page_choice = st.sidebar.selectbox(
+        "Go to",
+        options=["Dashboard", "Engagements"],
+        index=0 if route_current == "dashboard" else 1,
+        help="Switch between the dashboard and the Engagement Tracker page."
+    )
+    if page_choice == "Engagements" and route_current != "engagement":
+        go_to("engagement")  # main flow call -> st.rerun works
+    elif page_choice == "Dashboard" and route_current != "dashboard":
+        go_to("dashboard")   # main flow call -> st.rerun works
 
-df_view["_month_period"] = pd.to_datetime(df_view["Date"], errors="coerce").dt.to_period("M")
-if months_sel and len(months_sel) > 0:
-    selected_periods = {label_to_period[m] for m in months_sel if m in label_to_period}
-    df_view = df_view[df_view["_month_period"].isin(selected_periods)]
+    # Standard filters (kept visible on both pages for consistency)
+    sheet_options = df_for_options["SOURCE_SHEET"].unique().tolist() if not df_for_options.empty else []
+    sheet_filter = st.sidebar.selectbox("DEPARTMENT", options=sheet_options) if sheet_options else ""
+    client_filter = st.sidebar.text_input("CLIENT NAME")
+    client_code_input = st.sidebar.text_input("Enter Client Code to Change Status")
+    return sheet_filter, client_filter, client_code_input
 
-# Sort by internal Date descending
-if "Date" in df_view.columns:
-    with pd.option_context("mode.chained_assignment", None):
-        df_view["_DateParsed"] = pd.to_datetime(df_view["Date"], errors="coerce")
-        df_view = df_view.sort_values(by="_DateParsed", ascending=False).drop(columns=["_DateParsed"])
-df_view = df_view.drop(columns=["_month_period"], errors="ignore")
+# ------------------------------
+# DASHBOARD VIEW
+# ------------------------------
+def render_dashboard(df: pd.DataFrame):
+    render_header("OFFICE OF THE CUSTOMER DASHBOARD")
+    sheet_filter, client_filter, client_code_input = render_sidebar("dashboard", df)
 
-# --- Presentation layer ---
-# 1) Rename column header for the UI
-df_display = df_view.rename(columns={"Date": "Date of cross-sell engagement"})
+    # Filter data
+    filtered_df = df[df["SOURCE_SHEET"] == sheet_filter].copy() if not df.empty and sheet_filter else pd.DataFrame()
+    if not filtered_df.empty and client_filter:
+        filtered_df = filtered_df[
+            filtered_df["CLIENT NAME"].str.contains(client_filter, case=False, na=False)
+        ]
 
-# 2) Format date values as "DD Month YYYY" (e.g., 16 December 2025)
-with pd.option_context("mode.chained_assignment", None):
-    date_series = pd.to_datetime(df_display["Date of cross-sell engagement"], errors="coerce")
-    # Format: Day (2-digit), Full Month Name, Year
-    df_display["Date of cross-sell engagement"] = date_series.dt.strftime("%d %B %Y")
-    # For rows with invalid/blank dates, keep as empty string
-    df_display["Date of cross-sell engagement"] = df_display["Date of cross-sell engagement"].fillna("")
+    # Select columns based on sheet
+    column_map = {
+        "SS": ["CLIENT CODE", "CLIENT NAME", "PREMIUM,", "CORPORATE.", "PERSONAL LINES.", "AFFINITY.", "EMPLOYEE BENEFITS."],
+        "corp": ["CLIENT CODE", "CLIENT NAME", "PREMIUM.", "EMPLOYEE BENEFITS", "PERSONAL LINES", "STAFF SCHEMES"],
+        "EB": ["CLIENT CODE", "CLIENT NAME", "PREMIUM", "CORPORATE-", "AFFINITY-", "STAFF SCHEMES-", "PERSONAL LINES-"],
+        "PLD": ["CLIENT CODE", "CLIENT NAME", "PREMIUM;", "CORPORATE:", "STAFF SCHEMES:", "EMPLOYEE BENEFITS:", "AFFINITY:", "MINING:"],
+        "AFFINITY": ["CLIENT CODE", "CLIENT NAME", "PREMIUM:", "EMPLOYEE BENEFITS,", "STAFF SCHEMES,", "PERSONAL LINES,"],
+        "MINING": ["CLIENT CODE", "CLIENT NAME", "PREMIUM`", "EMPLOYEE BENEFITS`", "AFFINITY`", "STAFF SCHEMES`", "PERSONAL LINES`"]
+    }
+    columns_to_show = column_map.get(sheet_filter, filtered_df.columns.tolist() if not filtered_df.empty else [])
+    available_cols = [c for c in columns_to_show if not filtered_df.empty and c in filtered_df.columns]
+    display_df = filtered_df[available_cols].copy() if not filtered_df.empty else pd.DataFrame()
 
-fixed_cols_in_order = [
-    "Facilitator", "Client Name", "Date of cross-sell engagement", "Type", "Notes", "Status", "Flag",
-]
-available_cols = [c for c in fixed_cols_in_order if c in df_display.columns]
+    # Filter by client code
+    if not display_df.empty and client_code_input:
+        display_df = display_df[
+            display_df["CLIENT CODE"].astype(str).str.strip().str.lower() ==
+            client_code_input.strip().lower()
+        ].copy()
 
-if df_display.empty or not available_cols:
-    st.info("No engagements available to display.")
+    # Format premium columns
+    if not display_df.empty:
+        for col in display_df.columns:
+            if "PREMIUM" in col.upper():
+                display_df.loc[:, col] = display_df[col].apply(
+                    lambda x: (
+                        f"{float(x):,.2f}"
+                        if pd.notnull(x) and str(x).replace('.', '', 1).isdigit()
+                        else x
+                    )
+                )
+
+    # Display table
+    def highlight_cross_sell(val):
+        return "color: red; font-weight: bold;" if str(val).strip().lower() == "cross-sell" else ""
+
+    if not display_df.empty:
+        styled_df = display_df.style.applymap(highlight_cross_sell).hide(axis="index")
+        st.markdown('<div class="scroll-container">' + styled_df.to_html() + '</div>', unsafe_allow_html=True)
+    else:
+        st.info("No data for the current filters.")
+
+    # Edit section (as-is)
+    if client_code_input:
+        if display_df.empty:
+            st.warning("No client found with that code.")
+        else:
+            st.markdown("### Edit Client Details")
+            editable_cols = [c for c in display_df.columns if c not in ["CLIENT CODE", "CLIENT NAME"]]
+            selected_col = st.selectbox("Select Column to Edit", options=editable_cols)
+            new_value = st.selectbox("Select New Value", options=["Cross-Sell", "Shared Client"])
+            if st.button("Apply Change"):
+                payload = {
+                    "sheet": sheet_filter,
+                    "client_code": client_code_input.strip(),
+                    "column": selected_col,
+                    "new_value": new_value
+                }
+                try:
+                    update_response = requests.post(
+                        UPDATE_URL,
+                        json=payload,
+                        headers={'Cache-Control': 'no-cache'},
+                        timeout=20
+                    )
+                    if update_response.status_code == 200:
+                        st.success(update_response.json().get("message", "Updated successfully."))
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error(update_response.json().get("message", "Update failed."))
+                except Exception as e:
+                    st.error("Error updating API: " + str(e))
+
+# ------------------------------
+# ENGAGEMENT VIEW (Inputs + Editable Status; ID hidden)
+# ------------------------------
+def render_engagement(df_for_clients: pd.DataFrame):
+    render_header("Engagement Tracker")
+    # Sidebar remains (for navigation only; we ignore its filters here)
+    _sheet_filter, _client_filter, _client_code_input = render_sidebar("engagement", df_for_clients)
+
+    # Client options from main data (autocomplete)
+    client_options = sorted(df_for_clients["CLIENT NAME"].dropna().unique().tolist()) if not df_for_clients.empty else []
+
+    # --- Add Engagement form ---
+    with st.form(key="engagement_form", clear_on_submit=True):
+        st.markdown("### Add Engagement")
+        c1, c2 = st.columns(2)
+        with c1:
+            client_name = st.selectbox("Client Name", options=client_options, index=None, placeholder="Select client...")
+            facilitator = st.text_input("Facilitator", value="")
+            dtype = st.selectbox("Engagement Type (optional)", options=["", "Call", "Meeting", "Presentation", "Site Visit", "Other"])
+        with c2:
+            dt = st.date_input("Date of Engagement", value=date.today())
+            facilitator_email = st.text_input("Facilitator Email (optional)", value="")
+            notes = st.text_area("Notes (optional)", value="", height=120)
+        submitted = st.form_submit_button("Save Engagement")
+
+        if submitted:
+            if not client_name:
+                st.error("Please select a Client Name.")
+            elif not facilitator.strip():
+                st.error("Please enter a Facilitator.")
+            else:
+                ok = save_engagement(
+                    client_name=client_name,
+                    facilitator=facilitator.strip(),
+                    facilitator_email=facilitator_email.strip(),
+                    dt=dt,
+                    etype=dtype,
+                    notes=notes
+                )
+                if ok:
+                    st.success("Engagement saved.")
+                    st.rerun()
+                else:
+                    st.error("Could not save engagement. Please try again.")
+
+    # --- Load data (for table + inline status edits) ---
+    eng_df = load_engagements()
+    if eng_df.empty:
+        st.info("No engagement entries yet.")
+        # IMPORTANT: Use main-flow button pattern (no on_click) -> prevents 'no-op' banner
+        if st.button("⬅️ Back to Dashboard", type="secondary"):
+            go_home()
+        return
+
+    # ---------- Engagements Table with inline Status edit (ID hidden) ----------
+    st.markdown("### Engagements")
+
+    # Ensure consistent column order / presence
+    cols_all = ["ID", "Facilitator", "Client Name", "Date", "Type", "Notes", "Status"]
+    for c in cols_all:
+        if c not in eng_df.columns:
+            eng_df[c] = ""
+
+    # Format date consistently
+    def _fmt_date(x):
+        if pd.isna(x) or str(x).strip() == "":
+            return ""
+        try:
+            return pd.to_datetime(str(x)).date().isoformat()
+        except Exception:
+            return str(x)
+
+    eng_df["Date"] = eng_df["Date"].apply(_fmt_date)
+
+    # Build the table WITHOUT the ID column (use ID as index for change detection)
+    display_cols = ["Facilitator", "Client Name", "Date", "Type", "Notes", "Status"]  # no "ID"
+    table_df = eng_df[["ID"] + display_cols].copy().set_index("ID")
+
+    # Configure columns: Status editable as dropdown, others read-only
+    column_config = {
+        "Status": st.column_config.SelectboxColumn(
+            "Status",
+            options=["Open", "Closed"],
+            help="Change status, then click 'Apply Changes' to save"
+        ),
+        "Facilitator": st.column_config.Column("Facilitator", disabled=True),
+        "Client Name": st.column_config.Column("Client Name", disabled=True),
+        "Date": st.column_config.Column("Date", disabled=True),
+        "Type": st.column_config.Column("Type", disabled=True),
+        "Notes": st.column_config.Column("Notes", disabled=True),
+    }
+
+    edited_df = st.data_editor(
+        table_df,
+        use_container_width=True,
+        hide_index=True,        # hides the ID index from UI
+        column_config=column_config
+    )
+
+    # Detect and apply Status changes (compare by index = ID)
+    st.markdown("#### Apply Changes")
+    if st.button("Apply Changes"):
+        original_status = table_df[["Status"]].rename(columns={"Status": "Status_original"})
+        merged = edited_df.join(original_status, how="left")
+        changed = merged[merged["Status"] != merged["Status_original"]]
+
+        if changed.empty:
+            st.info("No status changes detected.")
+        else:
+            successes = 0
+            failures = []
+            for row_id, row in changed.iterrows():
+                ok = update_engagement_status(str(row_id), str(row["Status"]))
+                if ok:
+                    successes += 1
+                else:
+                    failures.append(str(row_id))
+
+            if successes:
+                st.success(f"Updated status for {successes} engagement(s).")
+            if failures:
+                st.error(f"Failed to update status for IDs: {', '.join(failures)}")
+
+            # Refresh to show latest values from storage
+            time.sleep(0.5)
+            st.rerun()
+
+    # IMPORTANT: Use main-flow button pattern (no on_click) -> prevents 'no-op' banner
+    if st.button("⬅️ Back to Dashboard", type="secondary"):
+        go_home()
+
+# ------------------------------
+# RENDER BASED ON ROUTE
+# ------------------------------
+df = load_main_data()
+if route == "engagement":
+    render_engagement(df)
 else:
-    styled = style_flags(df_display, available_cols)
-    st.markdown(styled.to_html(), unsafe_allow_html=True)
+    render_dashboard(df)
+
+
 
