@@ -1,3 +1,4 @@
+# app.py
 import streamlit as st
 import requests
 import pandas as pd
@@ -14,17 +15,17 @@ from datetime import date
 st.set_page_config(page_title="Office of the Customer Dashboard", layout="wide")
 
 # -------------------------------------------------
-# CONFIG (env-first, with your current defaults)
+# CONFIG (env-first)
 # -------------------------------------------------
 API_URL = os.environ.get("API_URL", "https://cross-sell-api-542s.onrender.com/data")  # main data
-UPDATE_URL = os.environ.get("UPDATE_URL", "https://cross-sell-api-542s.onrender.com/update")  # update endpoint for table edits
+UPDATE_URL = os.environ.get("UPDATE_URL", "https://cross-sell-api-542s.onrender.com/update")  # update endpoint
 
 # Engagement tracker endpoints (optional; if None -> local CSV persistence)
 ENGAGEMENTS_URL = os.environ.get("ENGAGEMENTS_URL", "") or None
 ENGAGEMENTS_ADD_URL = os.environ.get("ENGAGEMENTS_ADD_URL", "") or None
 ENGAGEMENTS_UPDATE_URL = os.environ.get("ENGAGEMENTS_UPDATE_URL", "") or None
 ENGAGEMENTS_LOCAL_CSV = os.environ.get("ENGAGEMENTS_LOCAL_CSV", "engagement_tracker.csv")
-ALLOW_LOCAL_CSV = os.environ.get("ALLOW_LOCAL_CSV", "true").lower() == "true"  # keep True for your current CSV behavior
+ALLOW_LOCAL_CSV = os.environ.get("ALLOW_LOCAL_CSV", "true").lower() == "true"  # set to false in prod if you disable CSV
 
 # -------------------------------------------------
 # ROUTING via st.query_params
@@ -34,7 +35,6 @@ route_param = params.get("route", None)
 if route_param is None:
     route = st.session_state.get("_route", "dashboard")
 else:
-    # supports both str and list values
     route = route_param if isinstance(route_param, str) else (
         route_param[0] if isinstance(route_param, list) and route_param else "dashboard"
     )
@@ -44,13 +44,13 @@ def go_to(route_name: str):
     """Navigate by setting URL query params and rerunning (main flow-safe)."""
     st.session_state["_route"] = route_name
     st.query_params.update({"route": route_name})  # update URL
-    st.rerun()  # called from main flow
+    st.rerun()
 
 def go_home():
     """Clear route and go back to dashboard (main flow-safe)."""
     st.session_state["_route"] = "dashboard"
-    st.query_params.clear()  # remove query params
-    st.rerun()  # called from main flow
+    st.query_params.clear()
+    st.rerun()
 
 # -------------------------------------------------
 # HELPERS
@@ -59,7 +59,7 @@ def canonicalize(name: str) -> str:
     """Normalize names for matching in Excel/API."""
     if not isinstance(name, str):
         return ""
-    base = re.sub(r"[\`\,:\-\[\]\.]+", "", name)  # strip punctuation we often see in sheets
+    base = re.sub(r"[`.,:\-\[\]]+", "", name)  # strip common punctuation
     base = re.sub(r"\s+", " ", base).strip()
     return base.upper()
 
@@ -158,7 +158,6 @@ def save_engagement(client_name: str, facilitator: str, facilitator_email: str, 
         except Exception:
             pass
 
-    # Local CSV persistence
     if not ALLOW_LOCAL_CSV:
         return False
 
@@ -187,7 +186,6 @@ def update_engagement_status(eng_id: str, new_status: str) -> bool:
         except Exception:
             pass
 
-    # Local
     if not ALLOW_LOCAL_CSV:
         return False
     df_e = load_engagements()
@@ -293,10 +291,11 @@ def load_main_data() -> pd.DataFrame:
         if response.status_code == 200:
             return pd.DataFrame(response.json())
         else:
-            st.error("Failed to fetch data from API.")
+            st.error(f"Failed to fetch data from API (status {response.status_code}).")
             return pd.DataFrame()
     except Exception as e:
-        st.error("Error connecting to API: " + str(e))
+        st.error("Error connecting to API.")
+        st.caption(str(e))
         return pd.DataFrame()
 
 df = load_main_data()
@@ -311,12 +310,12 @@ def render_sidebar(route_current: str, df_for_options: pd.DataFrame):
         "Go to",
         options=["Dashboard", "Engagements"],
         index=0 if route_current == "dashboard" else 1,
-        help="Switch between the dashboard and the Engagement page."
+        help="Switch between the dashboard and the Engagement Tracker page."
     )
     if page_choice == "Engagements" and route_current != "engagement":
-        go_to("engagement")  # main flow call -> st.rerun works
+        go_to("engagement")
     elif page_choice == "Dashboard" and route_current != "dashboard":
-        go_to("dashboard")  # main flow call -> st.rerun works
+        go_to("dashboard")
 
     # Standard filters (kept visible on both pages for consistency)
     sheet_options = df_for_options["SOURCE_SHEET"].unique().tolist() if not df_for_options.empty else []
@@ -336,10 +335,9 @@ def df_to_excel_bytes(df: pd.DataFrame, sheet_name: str = "Dashboard") -> bytes:
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name=sheet_name)
-        # Optional: set basic column widths based on content length (safe defaults)
         ws = writer.book[sheet_name]
+        # Basic column widths based on content length (safe defaults)
         for col_idx, col_name in enumerate(df.columns, start=1):
-            # width based on max of header or first 100 values (avoid huge widths)
             max_len = len(str(col_name))
             sample = df[col_name].astype(str).head(100)
             if not sample.empty:
@@ -359,7 +357,7 @@ def coerce_premium_to_numeric(df: pd.DataFrame) -> pd.DataFrame:
     return df_num
 
 # -------------------------------------------------
-# DASHBOARD VIEW (with Excel export)
+# DASHBOARD VIEW (with Excel export + robust update handling)
 # -------------------------------------------------
 def render_dashboard(df: pd.DataFrame):
     render_header("OFFICE OF THE CUSTOMER DASHBOARD")
@@ -392,11 +390,11 @@ def render_dashboard(df: pd.DataFrame):
             client_code_input.strip().lower()
         ].copy()
 
-    # ----- Create an export-ready DataFrame BEFORE formatting -----
+    # ----- Create export-ready DataFrame BEFORE on-screen formatting -----
     export_df = display_df.copy()
     export_df = coerce_premium_to_numeric(export_df)
 
-    # Format premium columns for on-screen table (human-readable)
+    # On-screen formatting for PREMIUM-like columns
     if not display_df.empty:
         for col in display_df.columns:
             if "PREMIUM" in col.upper():
@@ -419,7 +417,7 @@ def render_dashboard(df: pd.DataFrame):
         # ----- Export to Excel -----
         xlsx_bytes = df_to_excel_bytes(export_df, sheet_name="Dashboard Export")
         st.download_button(
-            label="📥 Export to Excel",
+            label="📥 Export filtered results to Excel",
             data=xlsx_bytes,
             file_name=f"dashboard_export_{date.today().isoformat()}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -429,7 +427,7 @@ def render_dashboard(df: pd.DataFrame):
     else:
         st.info("No data for the current filters.")
 
-    # Edit section (as-is)
+    # ----- Edit section (robust API response handling) -----
     if client_code_input:
         if display_df.empty:
             st.warning("No client found with that code.")
@@ -452,25 +450,52 @@ def render_dashboard(df: pd.DataFrame):
                     update_response = requests.post(
                         UPDATE_URL,
                         json=payload,
-                        headers={'Cache-Control': 'no-cache'},
+                        headers={'Cache-Control': 'no-cache', 'Content-Type': 'application/json'},
                         timeout=20
                     )
-                    if update_response.status_code == 200:
-                        st.success(update_response.json().get("message", "Updated successfully."))
+
+                    # Parse response safely
+                    status_code = update_response.status_code
+                    body_text = update_response.text or ""
+                    content_type = (update_response.headers.get("Content-Type") or "").lower()
+
+                    msg = None
+                    resp_json = None
+                    if "application/json" in content_type and body_text.strip():
+                        try:
+                            resp_json = update_response.json()
+                            if isinstance(resp_json, dict):
+                                msg = resp_json.get("message")
+                            else:
+                                # Non-dict JSON; stringify
+                                msg = str(resp_json)
+                        except Exception:
+                            # JSON header but body not valid JSON -> fall back to text
+                            pass
+
+                    if status_code == 200:
+                        st.success(msg or "Updated successfully.")
                         time.sleep(1)
                         st.rerun()
                     else:
-                        st.error(update_response.json().get("message", "Update failed."))
+                        if msg:
+                            st.error(msg)
+                        elif body_text.strip():
+                            st.error(f"Update failed ({status_code}): {body_text[:300]}")
+                        else:
+                            st.error(f"Update failed ({status_code}). No response body from server.")
+                except requests.exceptions.RequestException as e:
+                    st.error("Network error updating API.")
+                    st.caption(str(e))
                 except Exception as e:
-                    st.error("Error updating API: " + str(e))
+                    st.error("Unexpected error while updating.")
+                    st.caption(str(e))
 
 # -------------------------------------------------
 # ENGAGEMENT VIEW (Inputs + Editable Status; ID hidden)
 # -------------------------------------------------
 def render_engagement(df_for_clients: pd.DataFrame):
-    render_header("Engagements")
-
-    # Sidebar remains (for navigation only; we ignore its filters here)
+    render_header("Engagement Tracker")
     _sheet_filter, _client_filter, _client_code_input = render_sidebar("engagement", df_for_clients)
 
     # Client options from main data (autocomplete)
@@ -513,12 +538,10 @@ def render_engagement(df_for_clients: pd.DataFrame):
     eng_df = load_engagements()
     if eng_df.empty:
         st.info("No engagement entries yet.")
-        # IMPORTANT: Use main-flow button pattern (no on_click) -> prevents 'no-op' banner
         if st.button("⬅️ Back to Dashboard", type="secondary"):
             go_home()
         return
 
-    # -------- Engagements Table with inline Status edit (ID hidden) --------
     st.markdown("### Engagements")
 
     # Ensure consistent column order / presence
@@ -584,11 +607,9 @@ def render_engagement(df_for_clients: pd.DataFrame):
                 st.success(f"Updated status for {successes} engagement(s).")
             if failures:
                 st.error(f"Failed to update status for IDs: {', '.join(failures)}")
-        # Refresh to show latest values from storage
         time.sleep(0.5)
         st.rerun()
 
-    # IMPORTANT: Use main-flow button pattern (no on_click) -> prevents 'no-op' banner
     if st.button("⬅️ Back to Dashboard", type="secondary"):
         go_home()
 
@@ -600,4 +621,3 @@ if route == "engagement":
     render_engagement(df)
 else:
     render_dashboard(df)
-
