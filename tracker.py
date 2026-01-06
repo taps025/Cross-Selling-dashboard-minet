@@ -49,6 +49,7 @@ def load_data():
 
     final_df = pd.concat(combined_data, ignore_index=True)
     return final_df
+# table function 
 
 # ✅ Display Table Function
 def display_table(df):
@@ -93,4 +94,5 @@ final_df = load_data()
 if st.button("⛔ Reset Table to Zero"):
     reset_table(final_df)
 else:
+    display_table(final_df)
     display_table(final_df)
