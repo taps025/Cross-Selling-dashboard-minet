@@ -194,6 +194,12 @@ def _initialize_once():
 
 
 # -----------------------------
+# Initialize at import time (Flask 3.x compatible)
+# -----------------------------
+_initialize_once()
+
+
+# -----------------------------
 # Routes
 # -----------------------------
 @app.route("/", methods=["GET"])
@@ -336,20 +342,13 @@ def update_excel():
 
 
 # -----------------------------
-# Ensure initialization for Gunicorn
-# -----------------------------
-@app.before_first_request
-def _startup_once():
-    _initialize_once()
-
-
-# -----------------------------
 # Boot (local run)
 # -----------------------------
 if __name__ == "__main__":
     _initialize_once()
     port = int(os.environ.get("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+
 
 
 
