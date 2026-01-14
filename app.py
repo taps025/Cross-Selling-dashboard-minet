@@ -17,8 +17,8 @@ st.set_page_config(page_title="Office of the Customer Dashboard", layout="wide")
 # -------------------------------------------------
 # CONFIG (env-first)
 # -------------------------------------------------
-API_URL = os.environ.get("API_URL", "https://cross-sell-api-542s.onrender.com/data")  # main data
-UPDATE_URL = os.environ.get("UPDATE_URL", "https://cross-sell-api-542s.onrender.com/update")  # update endpoint
+API_URL = os.environ.get("API_URL", "https://api-mine-iw3t.onrender.com/data")  # main data
+UPDATE_URL = os.environ.get("UPDATE_URL", "https://api-mine-iw3t.onrender.com/update")  # update endpoint
 
 # Engagement tracker endpoints (optional; if None -> local CSV persistence)
 ENGAGEMENTS_URL = os.environ.get("ENGAGEMENTS_URL", "") or None
@@ -621,3 +621,4 @@ if route == "engagement":
     render_engagement(df)
 else:
     render_dashboard(df)
+
