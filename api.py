@@ -1,3 +1,4 @@
+
 # api.py
 from flask import Flask, jsonify, request
 import pandas as pd
@@ -12,27 +13,41 @@ import os
 import re
 import sqlite3
 import logging
+from typing import List, Dict, Any, Optional
 
-# ------------------------------------------------------------------------------
+# -----------------------------
 # Config
-# ------------------------------------------------------------------------------
-EXCEL_FILE = os.environ.get("EXCEL_FILE", "Data.xlsx")
-SHEETS = [s.strip() for s in os.environ.get("SHEETS", "corp,EB,SS,PLD,AFFINITY,MINING").split(",") if s.strip()]
-OVERRIDES_DB = os.environ.get("OVERRIDES_DB", "overrides.db")
+# -----------------------------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Allowed values for the status column (enforce if you want strict control)
+# Point these to your persistent disk paths in Render (e.g., /data/Data.xlsx, /data/overrides.db)
+EXCEL_FILE = os.environ.get("EXCEL_FILE", os.path.join(BASE_DIR, "Data.xlsx"))
+SHEETS = [s.strip() for s in os.environ.get("SHEETS", "corp,EB,SS,PLD,AFFINITY,MINING").split(",") if s.strip()]
+OVERRIDES_DB = os.environ.get("OVERRIDES_DB", os.path.join(BASE_DIR, "overrides.db"))
+
+# Allowed values for the Status column (optional strictness)
 ALLOWED_STATUS_VALUES = {"CROSS-SELL", "SHARED CLIENT"}
 
 # Flask app
 app = Flask(__name__)
-logging.basicConfig(level=logging.INFO)
 
-# In-memory cache of combined data (Excel -> pandas)
+# Configure logging (Render captures stdout/stderr)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s"
+)
+
+# In-memory cache of combined data
 final_df = pd.DataFrame()
 
-# ------------------------------------------------------------------------------
+# One-time initialization guard (works for Gunicorn + local)
+_init_lock = threading.Lock()
+_initialized = False
+
+
+# -----------------------------
 # Helpers: canonicalization & header/row lookup
-# ------------------------------------------------------------------------------
+# -----------------------------
 def canon(s: str) -> str:
     """Canonicalize header names to avoid punctuation/case mismatches."""
     if s is None:
@@ -41,33 +56,38 @@ def canon(s: str) -> str:
     s = re.sub(r"\s+", " ", s).strip()
     return s.upper()
 
-def find_header_index(ws, target_header: str):
+
+def find_header_index(ws, target_header: str) -> Optional[int]:
     """Return the ZERO-based index of the header that matches target_header (canonical)."""
     target_c = canon(target_header)
-    for i, cell in enumerate(ws[1]):  # header row is 1
+    for i, cell in enumerate(ws[1]):  # header row
         if canon(cell.value) == target_c:
             return i
     return None
 
-def worksheet_headers(ws):
-    """Return list of header strings from the first row."""
+
+def worksheet_headers(ws) -> List[str]:
     return [cell.value for cell in ws[1]]
 
-def get_row_dict(ws, row_idx_1based: int) -> dict:
-    """Read a row into a dict of header->value."""
+
+def get_row_dict(ws, row_idx_1based: int) -> Dict[str, Any]:
     headers = worksheet_headers(ws)
     values = [cell.value for cell in ws[row_idx_1based]]
     return {str(h): v for h, v in zip(headers, values)}
 
-# ------------------------------------------------------------------------------
+
+# -----------------------------
 # SQLite overrides (persisting user-edited values)
-# ------------------------------------------------------------------------------
+# -----------------------------
 def db():
     conn = sqlite3.connect(OVERRIDES_DB)
     conn.row_factory = sqlite3.Row
     return conn
 
+
 def init_db():
+    db_dir = os.path.dirname(OVERRIDES_DB) or "."
+    os.makedirs(db_dir, exist_ok=True)
     conn = db()
     conn.execute("""
         CREATE TABLE IF NOT EXISTS overrides(
@@ -83,11 +103,9 @@ def init_db():
     conn.commit()
     conn.close()
 
-def apply_overrides(rows: list[dict]) -> list[dict]:
-    """
-    Merge base rows with overrides so user changes persist even if Excel is refreshed.
-    Overrides are keyed by (sheet, client_code, column_actual).
-    """
+
+def apply_overrides(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Merge base rows with overrides so user changes persist even if Excel refreshes."""
     if not rows:
         return rows
     conn = db()
@@ -97,9 +115,8 @@ def apply_overrides(rows: list[dict]) -> list[dict]:
     out = []
     for r in rows:
         sheet = str(r.get("SOURCE_SHEET", ""))
-        code  = str(r.get("CLIENT CODE", ""))
+        code = str(r.get("CLIENT CODE", ""))
         nr = dict(r)
-        # apply any overrides for this row
         for k in list(nr.keys()):
             key = (sheet, code, k)
             if key in idx:
@@ -107,48 +124,94 @@ def apply_overrides(rows: list[dict]) -> list[dict]:
         out.append(nr)
     return out
 
-# ------------------------------------------------------------------------------
+
+# -----------------------------
 # Excel load / reload (watchdog on file changes)
-# ------------------------------------------------------------------------------
+# -----------------------------
 def load_excel():
     global final_df
     try:
+        if not os.path.exists(EXCEL_FILE):
+            app.logger.warning(f"Excel file not found: {EXCEL_FILE}")
+            final_df = pd.DataFrame()
+            return
+
         combined_data = []
         for sheet in SHEETS:
-            df = pd.read_excel(EXCEL_FILE, sheet_name=sheet, engine="openpyxl")
-            df["SOURCE_SHEET"] = sheet
-            combined_data.append(df)
+            try:
+                df = pd.read_excel(EXCEL_FILE, sheet_name=sheet, engine="openpyxl")
+                df["SOURCE_SHEET"] = sheet
+                combined_data.append(df)
+            except Exception as e:
+                app.logger.error(f"Error reading sheet '{sheet}': {e}")
+
         final_df = pd.concat(combined_data, ignore_index=True) if combined_data else pd.DataFrame()
-        app.logger.info("✅ Excel file reloaded.")
+        app.logger.info(f"✅ Excel reloaded from {EXCEL_FILE}. Rows: {final_df.shape[0]}")
     except Exception as e:
         app.logger.error(f"❌ Error loading Excel: {e}")
         final_df = pd.DataFrame()
 
+
 class ReloadHandler(FileSystemEventHandler):
     def on_modified(self, event):
-        # Simple filename match; in some setups event.src_path is absolute
-        if os.path.basename(event.src_path) == os.path.basename(EXCEL_FILE):
-            time.sleep(0.5)  # small delay to avoid partial writes
-            load_excel()
+        try:
+            if os.path.basename(event.src_path) == os.path.basename(EXCEL_FILE):
+                time.sleep(0.5)  # avoid partial write race
+                load_excel()
+        except Exception:
+            app.logger.warning("Watchdog handler error; continuing.", exc_info=True)
+
 
 def start_watcher():
-    event_handler = ReloadHandler()
-    observer = Observer()
-    # watch the directory containing the Excel file
-    watch_dir = os.path.dirname(os.path.abspath(EXCEL_FILE)) or "."
-    observer.schedule(event_handler, watch_dir, recursive=False)
-    observer.start()
+    try:
+        event_handler = ReloadHandler()
+        observer = Observer()
+        watch_dir = os.path.dirname(os.path.abspath(EXCEL_FILE)) or "."
+        observer.schedule(event_handler, watch_dir, recursive=False)
+        observer.start()
+        app.logger.info(f"🔎 Watching for changes in: {watch_dir}")
+    except Exception:
+        app.logger.warning("Watchdog not started (unsupported environment).", exc_info=True)
 
-# ------------------------------------------------------------------------------
+
+def _initialize_once():
+    """Run initialization only once per process (safe for Gunicorn workers)."""
+    global _initialized
+    with _init_lock:
+        if _initialized:
+            return
+        app.logger.info(f"EXCEL_FILE: {EXCEL_FILE} (exists={os.path.exists(EXCEL_FILE)})")
+        app.logger.info(f"OVERRIDES_DB: {OVERRIDES_DB}")
+        app.logger.info(f"SHEETS: {SHEETS}")
+        init_db()
+        load_excel()
+        # Watchdog is best-effort; ok if it can't run on the platform
+        try:
+            threading.Thread(target=start_watcher, daemon=True).start()
+        except Exception:
+            app.logger.exception("Failed to start file watcher")
+        _initialized = True
+
+
+# -----------------------------
 # Routes
-# ------------------------------------------------------------------------------
+# -----------------------------
 @app.route("/", methods=["GET"])
 def home():
     return "✅ API is running! Use /data to get data or POST /update to update Excel."
 
+
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "rows_cached": int(final_df.shape[0])})
+    exists = os.path.exists(EXCEL_FILE)
+    return jsonify({
+        "status": "ok",
+        "excel_file": EXCEL_FILE,
+        "excel_exists": bool(exists),
+        "sheets": SHEETS,
+        "rows_cached": 0 if final_df is None else int(final_df.shape[0])
+    })
+
 
 @app.route("/data", methods=["GET"])
 def get_all_data():
@@ -156,14 +219,15 @@ def get_all_data():
     merged = apply_overrides(base)
     return jsonify(merged)
 
+
 @app.route("/update", methods=["POST"])
 def update_excel():
     """
-    Request JSON:
+    JSON:
     {
       "sheet": "corp",
       "client_code": "C001",
-      "column": "Status",       # visible header from the UI
+      "column": "Status",   # (visible header; punctuation/case tolerant)
       "new_value": "Shared Client"
     }
     """
@@ -177,21 +241,22 @@ def update_excel():
         if not all([sheet, client_code, column_visible]):
             return jsonify({"status": "error", "message": "Missing sheet, client_code, or column"}), 400
 
-        # If updating STATUS, optionally enforce allowed values
+        # Optional strict validation for status
         if canon(column_visible) == "STATUS":
-            if canon(new_value) not in ALLOWED_STATUS_VALUES:
-                return jsonify({
-                    "status": "error",
-                    "message": "Invalid status. Use 'Cross-Sell' or 'Shared Client'."
-                }), 400
+            if canon(str(new_value)) not in ALLOWED_STATUS_VALUES:
+                return jsonify({"status": "error",
+                                "message": "Invalid status. Use 'Cross-Sell' or 'Shared Client'."}), 400
 
-        # Open workbook / validate sheet
+        if not os.path.exists(EXCEL_FILE):
+            return jsonify({"status": "error",
+                            "message": f"Excel file not found at {EXCEL_FILE}. Upload it to the persistent disk."}), 500
+
         wb = load_workbook(EXCEL_FILE)
         if sheet not in wb.sheetnames:
             return jsonify({"status": "error", "message": f"Sheet '{sheet}' not found"}), 404
         ws = wb[sheet]
 
-        # Find header indices by canonical names
+        # Header resolution
         client_code_col_idx = find_header_index(ws, "CLIENT CODE")
         if client_code_col_idx is None:
             return jsonify({"status": "error", "message": "CLIENT CODE header not found"}), 400
@@ -200,41 +265,44 @@ def update_excel():
         if target_col_idx is None:
             return jsonify({"status": "error", "message": f"Column '{column_visible}' not found"}), 400
 
-        # Find row (case-insensitive match on CLIENT CODE)
-        target_row_idx = None  # 1-based index for openpyxl
-        for row in ws.iter_rows(min_row=2):  # skip header row
+        # Find the row by client code (case-insensitive)
+        target_row_idx = None
+        for row in ws.iter_rows(min_row=2):
             cell_val = row[client_code_col_idx].value
             if cell_val is not None and str(cell_val).strip().lower() == client_code.lower():
-                target_row_idx = row[0].row
+                target_row_idx = row[0].row  # 1-based
                 break
+
         if target_row_idx is None:
             return jsonify({"status": "error", "message": f"Client Code '{client_code}' not found"}), 404
 
-        # Update the cell (openpyxl column indices are 1-based)
+        # Write new value
         ws.cell(row=target_row_idx, column=target_col_idx + 1, value=new_value)
 
-        # Ensure STATUS_UPDATED_AT column exists; set timestamp
+        # Timestamp column
         ts_header_idx = find_header_index(ws, "STATUS_UPDATED_AT")
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         if ts_header_idx is None:
-            # Create new timestamp column at the end
             new_ts_col_1based = ws.max_column + 1
             ws.cell(row=1, column=new_ts_col_1based, value="STATUS_UPDATED_AT")
             ws.cell(row=target_row_idx, column=new_ts_col_1based, value=current_time)
         else:
             ws.cell(row=target_row_idx, column=ts_header_idx + 1, value=current_time)
 
-        # Save workbook (handle Excel lock)
+        # Save Excel (handle locks)
         try:
             wb.save(EXCEL_FILE)
         except PermissionError:
-            return jsonify({"status": "error", "message": "Excel file is open. Please close it and try again."}), 500
+            return jsonify({"status": "error",
+                            "message": "Excel file is open/locked. Please close it and retry."}), 500
 
-        # ALSO persist into overrides (bulletproof against ETL/refresh)
+        # Persist override (bulletproof against ETL/refresh)
         headers = worksheet_headers(ws)
         actual_header = headers[target_col_idx] if target_col_idx < len(headers) else column_visible
         now_epoch = int(time.time())
 
+        db_dir = os.path.dirname(OVERRIDES_DB) or "."
+        os.makedirs(db_dir, exist_ok=True)
         conn = db()
         conn.execute("""
             INSERT INTO overrides(sheet, client_code, column_canon, column_actual, new_value, updated_at)
@@ -247,11 +315,11 @@ def update_excel():
         conn.commit()
         conn.close()
 
-        # Small delay then reload combined DF
-        time.sleep(0.5)
+        # Small delay & reload cache
+        time.sleep(0.3)
         load_excel()
 
-        # Confirm by reading back the Excel row
+        # Confirm by reading back live value
         live_row = get_row_dict(ws, target_row_idx)
         return jsonify({
             "status": "success",
@@ -262,21 +330,26 @@ def update_excel():
             "new_value": live_row.get(actual_header, new_value),
             "updated_at": current_time
         })
-
     except Exception as e:
         app.logger.error("Error:\n" + traceback.format_exc())
         return jsonify({"status": "error", "message": str(e)}), 500
 
-# ------------------------------------------------------------------------------
-# Boot
-# ------------------------------------------------------------------------------
+
+# -----------------------------
+# Ensure initialization for Gunicorn
+# -----------------------------
+@app.before_first_request
+def _startup_once():
+    _initialize_once()
+
+
+# -----------------------------
+# Boot (local run)
+# -----------------------------
 if __name__ == "__main__":
-    # Initialize DB and load Excel once
-    init_db()
-    load_excel()
-    # Start watchdog in background
-    threading.Thread(target=start_watcher, daemon=True).start()
-    # Run API
-    app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
+    _initialize_once()
+    port = int(os.environ.get("PORT", "5000"))
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+
 
 
