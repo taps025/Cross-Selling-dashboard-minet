@@ -310,7 +310,7 @@ def render_sidebar(route_current: str, df_for_options: pd.DataFrame):
         "Go to",
         options=["Dashboard", "Engagements"],
         index=0 if route_current == "dashboard" else 1,
-        help="Switch between the dashboard and the Engagement Tracker page."
+        help="Switch between the dashboard and the Engagements page."
     )
     if page_choice == "Engagements" and route_current != "engagement":
         go_to("engagement")
@@ -495,7 +495,7 @@ def render_dashboard(df: pd.DataFrame):
 # ENGAGEMENT VIEW (Inputs + Editable Status; ID hidden)
 # -------------------------------------------------
 def render_engagement(df_for_clients: pd.DataFrame):
-    render_header("Engagement Tracker")
+    render_header("Engagements")
     _sheet_filter, _client_filter, _client_code_input = render_sidebar("engagement", df_for_clients)
 
     # Client options from main data (autocomplete)
@@ -621,4 +621,5 @@ if route == "engagement":
     render_engagement(df)
 else:
     render_dashboard(df)
+
 
